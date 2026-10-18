@@ -1,0 +1,40 @@
+{
+ "schema_version": 1,
+ "key": "pocket_tts",
+ "title": "Kyutai Pocket TTS (english_2026-09_2)",
+ "task": "text-to-speech (CALM flow-matching FlowLM over continuous Mimi latents)",
+ "delivery_models": [
+  "pocket_tts"
+ ],
+ "precisions": [
+  "bf16",
+  "fp32",
+  "fp16",
+  "bfp8_b"
+ ],
+ "delivery_precisions": [
+  "bf16"
+ ],
+ "corpus": {
+  "sha256": "2160008909385c5384b2e3fc7fa72ada9b463aa5c21e189e5189b5a15a187964",
+  "file": "corpus.json"
+ },
+ "reference": {
+  "packages": [
+   "pocket-tts==3.3.0",
+   "transformers==5.17.0",
+   "numpy==2.4.4",
+   "scipy==1.16.2",
+   "soundfile==0.13.1",
+   "librosa==1.0.0"
+  ],
+  "imports": [
+   "pocket_tts",
+   "transformers",
+   "safetensors",
+   "scipy",
+   "soundfile",
+   "librosa"
+  ]
+ }
+}

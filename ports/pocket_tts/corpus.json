@@ -1,0 +1,265 @@
+{
+ "cases": [
+  {
+   "label": "The birch canoe slid on the smooth planks.",
+   "name": "hs-0001",
+   "source": "harvard",
+   "text": "The birch canoe slid on the smooth planks.",
+   "voice": "alba"
+  },
+  {
+   "label": "Paper will dry out when wet.",
+   "name": "hs-short",
+   "source": "harvard",
+   "text": "Paper will dry out when wet.",
+   "voice": "vera"
+  },
+  {
+   "label": "It was hidden from sight by a mass of leaves and shrubs.",
+   "name": "hs-long",
+   "source": "harvard",
+   "text": "It was hidden from sight by a mass of leaves and shrubs.",
+   "voice": "michael"
+  },
+  {
+   "label": "Hello.",
+   "name": "edge-one-word",
+   "source": "synthetic",
+   "text": "Hello.",
+   "voice": "alba"
+  },
+  {
+   "label": "The year 2026 marked 3145 recorded tests across 42 separate labs.",
+   "name": "edge-digits",
+   "source": "synthetic",
+   "text": "The year 2026 marked 3145 recorded tests across 42 separate labs.",
+   "voice": "vera"
+  },
+  {
+   "label": "Wait, what?! Really... yes; fine.",
+   "name": "edge-punct",
+   "source": "synthetic",
+   "text": "Wait, what?! Really... yes; fine.",
+   "voice": "michael"
+  },
+  {
+   "label": "PLEASE SPEAK UP LOUDER NOW.",
+   "name": "edge-upper",
+   "source": "synthetic",
+   "text": "PLEASE SPEAK UP LOUDER NOW.",
+   "voice": "alba"
+  },
+  {
+   "label": "Glue the sheet to the dark blue background. It's easy to tell the depth of a well. These days a chicken leg is a rare dish.",
+   "name": "edge-maxlen",
+   "source": "harvard",
+   "text": "Glue the sheet to the dark blue background. It's easy to tell the depth of a well. These days a chicken leg is a rare dish.",
+   "voice": "vera"
+  },
+  {
+   "label": "Paper will dry out when wet.",
+   "name": "revisit-short",
+   "source": "harvard",
+   "text": "Paper will dry out when wet.",
+   "voice": "vera"
+  },
+  {
+   "label": "Help the woman get back to her feet.",
+   "name": "full-hs-00",
+   "source": "harvard",
+   "text": "Help the woman get back to her feet.",
+   "voice": "alba"
+  },
+  {
+   "label": "Mend the coat before you go out.",
+   "name": "full-hs-01",
+   "source": "harvard",
+   "text": "Mend the coat before you go out.",
+   "voice": "vera"
+  },
+  {
+   "label": "Lift the square stone over the fence.",
+   "name": "full-hs-02",
+   "source": "harvard",
+   "text": "Lift the square stone over the fence.",
+   "voice": "michael"
+  },
+  {
+   "label": "Float the soap on top of the bath water.",
+   "name": "full-hs-03",
+   "source": "harvard",
+   "text": "Float the soap on top of the bath water.",
+   "voice": "alba"
+  },
+  {
+   "label": "The hostess taught the new maid to serve.",
+   "name": "full-hs-04",
+   "source": "harvard",
+   "text": "The hostess taught the new maid to serve.",
+   "voice": "vera"
+  },
+  {
+   "label": "A pencil with black lead writes best.",
+   "name": "full-hs-05",
+   "source": "harvard",
+   "text": "A pencil with black lead writes best.",
+   "voice": "michael"
+  },
+  {
+   "label": "Grace makes up for lack of beauty.",
+   "name": "full-hs-06",
+   "source": "harvard",
+   "text": "Grace makes up for lack of beauty.",
+   "voice": "alba"
+  },
+  {
+   "label": "The vamp of the shoe had a gold buckle.",
+   "name": "full-hs-07",
+   "source": "harvard",
+   "text": "The vamp of the shoe had a gold buckle.",
+   "voice": "vera"
+  },
+  {
+   "label": "The clothes dried on a thin wooden rack.",
+   "name": "full-hs-08",
+   "source": "harvard",
+   "text": "The clothes dried on a thin wooden rack.",
+   "voice": "michael"
+  },
+  {
+   "label": "A force equal to that would move the earth.",
+   "name": "full-hs-09",
+   "source": "harvard",
+   "text": "A force equal to that would move the earth.",
+   "voice": "alba"
+  },
+  {
+   "label": "He wrote his name boldly at the top of the sheet.",
+   "name": "full-hs-10",
+   "source": "harvard",
+   "text": "He wrote his name boldly at the top of the sheet.",
+   "voice": "vera"
+  },
+  {
+   "label": "Slide the tray across the glass top.",
+   "name": "full-hs-11",
+   "source": "harvard",
+   "text": "Slide the tray across the glass top.",
+   "voice": "michael"
+  },
+  {
+   "label": "Tear a thin sheet from the yellow pad.",
+   "name": "full-hs-12",
+   "source": "harvard",
+   "text": "Tear a thin sheet from the yellow pad.",
+   "voice": "alba"
+  },
+  {
+   "label": "A smatter of French is worse than none.",
+   "name": "full-hs-13",
+   "source": "harvard",
+   "text": "A smatter of French is worse than none.",
+   "voice": "vera"
+  },
+  {
+   "label": "See the player scoot to third base.",
+   "name": "full-hs-14",
+   "source": "harvard",
+   "text": "See the player scoot to third base.",
+   "voice": "michael"
+  },
+  {
+   "label": "The long journey home took a year.",
+   "name": "full-hs-15",
+   "source": "harvard",
+   "text": "The long journey home took a year.",
+   "voice": "alba"
+  },
+  {
+   "label": "Where did you go yesterday afternoon?",
+   "name": "full-edge-question",
+   "source": "synthetic",
+   "text": "Where did you go yesterday afternoon?",
+   "voice": "michael"
+  },
+  {
+   "label": "It's the third one they've tried, and it's better.",
+   "name": "full-edge-apostrophe",
+   "source": "synthetic",
+   "text": "It's the third one they've tried, and it's better.",
+   "voice": "alba"
+  },
+  {
+   "label": "It was a bad error on the part of the new judge.",
+   "name": "full-long",
+   "source": "harvard",
+   "text": "It was a bad error on the part of the new judge.",
+   "voice": "vera"
+  },
+  {
+   "label": "Help the woman get back to her feet.",
+   "name": "full-revisit",
+   "source": "harvard",
+   "text": "Help the woman get back to her feet.",
+   "voice": "alba"
+  }
+ ],
+ "protocol": "single text chunk (<=50 tokens), temperature 0.3, 1 LSD decode step, seeded noise pool",
+ "schema_version": 1,
+ "selection": {
+  "bringup": {
+   "digits": "edge-digits",
+   "long": "hs-long",
+   "maxlen": "edge-maxlen",
+   "one_word": "edge-one-word",
+   "punct": "edge-punct",
+   "revisit": "revisit-short",
+   "short": "hs-short",
+   "upper": "edge-upper"
+  },
+  "full": [
+   "full-hs-00",
+   "full-hs-01",
+   "full-hs-02",
+   "full-hs-03",
+   "full-hs-04",
+   "full-hs-05",
+   "full-hs-06",
+   "full-hs-07",
+   "full-hs-08",
+   "full-hs-09",
+   "full-hs-10",
+   "full-hs-11",
+   "full-hs-12",
+   "full-hs-13",
+   "full-hs-14",
+   "full-hs-15",
+   "full-edge-question",
+   "full-edge-apostrophe",
+   "full-long",
+   "full-revisit"
+  ],
+  "smoke": "hs-0001"
+ },
+ "sources": [
+  {
+   "accessed": "2026-10-15",
+   "license": "public domain",
+   "name": "Harvard sentences (IEEE 1965, public domain)",
+   "note": "720 phonetically balanced sentences; deterministic seeded selection (random.Random(20261015)); frozen below",
+   "url": "https://raw.githubusercontent.com/tidyverse/stringr/master/data-raw/harvard-sentences.txt"
+  },
+  {
+   "generator": "authored for this benchmark; deterministic, no RNG",
+   "license": "CC0",
+   "name": "synthetic edge texts"
+  },
+  {
+   "license": "CC-BY-4.0",
+   "name": "voice prompt states",
+   "note": "precomputed ModelState KV caches, pinned in models.json",
+   "url": "https://huggingface.co/kyutai/pocket-tts/tree/main/languages/english_2026-09_2/embeddings"
+  }
+ ],
+ "task": "english text-to-speech with pinned voice states"
+}
