@@ -1,0 +1,8 @@
+{
+ "family": "qs8-vlrelu",
+ "kernel": "/home/abror/portforge-cpu/repo/ports/xnnpack-rvv/kernels/qs8-vlrelu/kernel.c",
+ "name": "xnn_qs8_vlrelu_ukernel__rvv_pf1",
+ "kernel_sha256": "d6d0fdb726437a5f140901c6564d6689c4c5b78af8831c41f4977ddcd6430b57",
+ "utc": "2026-10-19T18:29:39.075984+00:00",
+ "note": "Clean-room port of qs8-vlrelu to RVV: 3-regime dispatch (vcvt-style requantize ladder at slope 1; 7-op i16 general chain at e8m4/i16m8; exact i32 chain for multiplier 32768). Gates: test PASS 10x5 wheres, verify ALL_PASSED 33/33 producer-true configs to batch 8, bench PASS 2.597x geomean vs rvv_u2v (28.6-29.6x vs scalar). Ties the third-party optimized-rvv kernel at every measured size while fixing its int16 multiplier truncation at the init inclusive bound."
+}

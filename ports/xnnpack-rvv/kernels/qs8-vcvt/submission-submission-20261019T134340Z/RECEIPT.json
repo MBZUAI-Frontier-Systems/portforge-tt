@@ -1,0 +1,8 @@
+{
+ "family": "qs8-vcvt",
+ "kernel": "/home/abror/portforge-cpu/repo/ports/xnnpack-rvv/kernels/qs8-vcvt/kernel.c",
+ "name": "xnn_qs8_vcvt_ukernel__rvv_pf1",
+ "kernel_sha256": "83b4aab051b53a3af38afd1e7c21accd5ba36e91fb00a1fb3b87b310e9950455",
+ "utc": "2026-10-19T13:43:40.506676+00:00",
+ "note": "Two-regime qs8-vcvt RVV kernel: i16 vsmul chain (e8m4/i16m8, exact for multiplier<=32767) + exact path for multiplier==32768, where upstream rvv_u1v/u2v/u4v truncate the int32 multiplier to int16 and sign-flip every output. Gates: test PASS (8/8 at QEMU VLEN 128/256/512/1024 + X280), verify ALL_PASSED (cvc5 vs Neon, 17 producer-true configs incl. mult=32768, batches 1-8, VLEN 512), bench X280: 27.5-28.6x vs scalar_u4, tied with rvv_u4v (22618.8 vs 22621 ns @N:130560; 2815.5 vs 2811 ns @N:16320; geomean 0.999), 2.08x vs u1v, 1.17x vs u2v. evaluate.bench crashes in its reporting line (evaluate.py:159, TypeError float not subscriptable) - measurements complete and were tabulated from the raw receipts (see REPORT.md sec 6). Full receipts: kernels/qs8-vcvt/REPORT.md."
+}

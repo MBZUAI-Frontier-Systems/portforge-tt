@@ -1,0 +1,172 @@
+{
+  "tests": 15,
+  "failures": 0,
+  "disabled": 0,
+  "errors": 0,
+  "timestamp": "2026-10-20T09:18:18Z",
+  "time": "2.395s",
+  "name": "AllTests",
+  "testsuites": [
+    {
+      "name": "xnn_qs8_vmul_minmax_rndnu_ukernel__rvv_pf1",
+      "tests": 15,
+      "failures": 0,
+      "disabled": 0,
+      "errors": 0,
+      "timestamp": "2026-10-20T09:18:18Z",
+      "time": "2.392s",
+      "testsuite": [
+        {
+          "name": "batch_eq",
+          "file": "\/pf\/build\/trees\/pf-qs8-vmul-minmax-rndnu\/src\/qs8-vmul\/qs8-vmul-minmax-rndnu.inc",
+          "line": 10,
+          "status": "RUN",
+          "result": "COMPLETED",
+          "timestamp": "2026-10-20T09:18:18Z",
+          "time": "0.016s",
+          "classname": "xnn_qs8_vmul_minmax_rndnu_ukernel__rvv_pf1"
+        },
+        {
+          "name": "batch_div",
+          "file": "\/pf\/build\/trees\/pf-qs8-vmul-minmax-rndnu\/src\/qs8-vmul\/qs8-vmul-minmax-rndnu.inc",
+          "line": 10,
+          "status": "RUN",
+          "result": "COMPLETED",
+          "timestamp": "2026-10-20T09:18:18Z",
+          "time": "0.131s",
+          "classname": "xnn_qs8_vmul_minmax_rndnu_ukernel__rvv_pf1"
+        },
+        {
+          "name": "batch_lt",
+          "file": "\/pf\/build\/trees\/pf-qs8-vmul-minmax-rndnu\/src\/qs8-vmul\/qs8-vmul-minmax-rndnu.inc",
+          "line": 10,
+          "status": "RUN",
+          "result": "COMPLETED",
+          "timestamp": "2026-10-20T09:18:18Z",
+          "time": "0.776s",
+          "classname": "xnn_qs8_vmul_minmax_rndnu_ukernel__rvv_pf1"
+        },
+        {
+          "name": "batch_gt",
+          "file": "\/pf\/build\/trees\/pf-qs8-vmul-minmax-rndnu\/src\/qs8-vmul\/qs8-vmul-minmax-rndnu.inc",
+          "line": 10,
+          "status": "RUN",
+          "result": "COMPLETED",
+          "timestamp": "2026-10-20T09:18:19Z",
+          "time": "0s",
+          "classname": "xnn_qs8_vmul_minmax_rndnu_ukernel__rvv_pf1"
+        },
+        {
+          "name": "inplace_a",
+          "file": "\/pf\/build\/trees\/pf-qs8-vmul-minmax-rndnu\/src\/qs8-vmul\/qs8-vmul-minmax-rndnu.inc",
+          "line": 10,
+          "status": "RUN",
+          "result": "COMPLETED",
+          "timestamp": "2026-10-20T09:18:19Z",
+          "time": "0.038s",
+          "classname": "xnn_qs8_vmul_minmax_rndnu_ukernel__rvv_pf1"
+        },
+        {
+          "name": "inplace_b",
+          "file": "\/pf\/build\/trees\/pf-qs8-vmul-minmax-rndnu\/src\/qs8-vmul\/qs8-vmul-minmax-rndnu.inc",
+          "line": 10,
+          "status": "RUN",
+          "result": "COMPLETED",
+          "timestamp": "2026-10-20T09:18:19Z",
+          "time": "0.038s",
+          "classname": "xnn_qs8_vmul_minmax_rndnu_ukernel__rvv_pf1"
+        },
+        {
+          "name": "inplace_a_and_b",
+          "file": "\/pf\/build\/trees\/pf-qs8-vmul-minmax-rndnu\/src\/qs8-vmul\/qs8-vmul-minmax-rndnu.inc",
+          "line": 10,
+          "status": "RUN",
+          "result": "COMPLETED",
+          "timestamp": "2026-10-20T09:18:19Z",
+          "time": "0.036s",
+          "classname": "xnn_qs8_vmul_minmax_rndnu_ukernel__rvv_pf1"
+        },
+        {
+          "name": "a_zero_point",
+          "file": "\/pf\/build\/trees\/pf-qs8-vmul-minmax-rndnu\/src\/qs8-vmul\/qs8-vmul-minmax-rndnu.inc",
+          "line": 10,
+          "status": "RUN",
+          "result": "COMPLETED",
+          "timestamp": "2026-10-20T09:18:19Z",
+          "time": "0.23s",
+          "classname": "xnn_qs8_vmul_minmax_rndnu_ukernel__rvv_pf1"
+        },
+        {
+          "name": "b_zero_point",
+          "file": "\/pf\/build\/trees\/pf-qs8-vmul-minmax-rndnu\/src\/qs8-vmul\/qs8-vmul-minmax-rndnu.inc",
+          "line": 10,
+          "status": "RUN",
+          "result": "COMPLETED",
+          "timestamp": "2026-10-20T09:18:19Z",
+          "time": "0.23s",
+          "classname": "xnn_qs8_vmul_minmax_rndnu_ukernel__rvv_pf1"
+        },
+        {
+          "name": "y_zero_point",
+          "file": "\/pf\/build\/trees\/pf-qs8-vmul-minmax-rndnu\/src\/qs8-vmul\/qs8-vmul-minmax-rndnu.inc",
+          "line": 10,
+          "status": "RUN",
+          "result": "COMPLETED",
+          "timestamp": "2026-10-20T09:18:20Z",
+          "time": "0.229s",
+          "classname": "xnn_qs8_vmul_minmax_rndnu_ukernel__rvv_pf1"
+        },
+        {
+          "name": "a_scale",
+          "file": "\/pf\/build\/trees\/pf-qs8-vmul-minmax-rndnu\/src\/qs8-vmul\/qs8-vmul-minmax-rndnu.inc",
+          "line": 10,
+          "status": "RUN",
+          "result": "COMPLETED",
+          "timestamp": "2026-10-20T09:18:20Z",
+          "time": "0.193s",
+          "classname": "xnn_qs8_vmul_minmax_rndnu_ukernel__rvv_pf1"
+        },
+        {
+          "name": "b_scale",
+          "file": "\/pf\/build\/trees\/pf-qs8-vmul-minmax-rndnu\/src\/qs8-vmul\/qs8-vmul-minmax-rndnu.inc",
+          "line": 10,
+          "status": "RUN",
+          "result": "COMPLETED",
+          "timestamp": "2026-10-20T09:18:20Z",
+          "time": "0.193s",
+          "classname": "xnn_qs8_vmul_minmax_rndnu_ukernel__rvv_pf1"
+        },
+        {
+          "name": "y_scale",
+          "file": "\/pf\/build\/trees\/pf-qs8-vmul-minmax-rndnu\/src\/qs8-vmul\/qs8-vmul-minmax-rndnu.inc",
+          "line": 10,
+          "status": "RUN",
+          "result": "COMPLETED",
+          "timestamp": "2026-10-20T09:18:20Z",
+          "time": "0.193s",
+          "classname": "xnn_qs8_vmul_minmax_rndnu_ukernel__rvv_pf1"
+        },
+        {
+          "name": "qmin",
+          "file": "\/pf\/build\/trees\/pf-qs8-vmul-minmax-rndnu\/src\/qs8-vmul\/qs8-vmul-minmax-rndnu.inc",
+          "line": 10,
+          "status": "RUN",
+          "result": "COMPLETED",
+          "timestamp": "2026-10-20T09:18:20Z",
+          "time": "0.038s",
+          "classname": "xnn_qs8_vmul_minmax_rndnu_ukernel__rvv_pf1"
+        },
+        {
+          "name": "qmax",
+          "file": "\/pf\/build\/trees\/pf-qs8-vmul-minmax-rndnu\/src\/qs8-vmul\/qs8-vmul-minmax-rndnu.inc",
+          "line": 10,
+          "status": "RUN",
+          "result": "COMPLETED",
+          "timestamp": "2026-10-20T09:18:20Z",
+          "time": "0.038s",
+          "classname": "xnn_qs8_vmul_minmax_rndnu_ukernel__rvv_pf1"
+        }
+      ]
+    }
+  ]
+}

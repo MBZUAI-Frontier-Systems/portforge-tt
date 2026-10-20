@@ -1,0 +1,19 @@
+[
+  {"input_zero_point": 0, "multiplier": 256, "output_zero_point": 0},
+  {"input_zero_point": 0, "multiplier": 1024, "output_zero_point": 0},
+  {"input_zero_point": 5, "multiplier": 4096, "output_zero_point": 3},
+  {"input_zero_point": 0, "multiplier": 16384, "output_zero_point": 0},
+  {"input_zero_point": 0, "multiplier": 32768, "output_zero_point": 0},
+  {"input_zero_point": -5, "multiplier": 32765, "output_zero_point": 7},
+  {"input_zero_point": 0, "multiplier": 64, "output_zero_point": 0},
+  {"input_zero_point": 0, "multiplier": 4, "output_zero_point": 0},
+  {"input_zero_point": 0, "multiplier": 1, "output_zero_point": 0},
+  {"input_zero_point": 9, "multiplier": 1, "output_zero_point": -9},
+  {"input_zero_point": 0, "multiplier": 384, "output_zero_point": 0},
+  {"input_zero_point": -3, "multiplier": 396, "output_zero_point": 2},
+  {"input_zero_point": -128, "multiplier": 69, "output_zero_point": 127},
+  {"input_zero_point": -128, "multiplier": 256, "output_zero_point": -128},
+  {"input_zero_point": 127, "multiplier": 256, "output_zero_point": 127},
+  {"input_zero_point": -128, "multiplier": 256, "output_zero_point": 127},
+  {"input_zero_point": 100, "multiplier": 512, "output_zero_point": -100}
+]

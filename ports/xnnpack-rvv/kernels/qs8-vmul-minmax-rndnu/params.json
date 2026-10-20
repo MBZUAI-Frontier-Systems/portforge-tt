@@ -1,0 +1,16 @@
+[
+  {"a_zero_point": 0, "b_zero_point": 0, "left_pre_shift": 2, "multiplier": 1073741824, "left_post_shift": -1, "output_zero_point": 0, "output_min": -128, "output_max": 127, "why": "mult 0x40000000 (lower bound), shift 0"},
+  {"a_zero_point": 0, "b_zero_point": 0, "left_pre_shift": 0, "multiplier": 1073741824, "left_post_shift": -15, "output_zero_point": 0, "output_min": -128, "output_max": 127, "why": "pos 2^-16 (assert edge), shift 15, E=46 (max)"},
+  {"a_zero_point": 0, "b_zero_point": 0, "left_pre_shift": 0, "multiplier": 1073741824, "left_post_shift": -14, "output_zero_point": 0, "output_min": -128, "output_max": 127, "why": "pos 2^-15, shift 14, E=45"},
+  {"a_zero_point": 0, "b_zero_point": 0, "left_pre_shift": 9, "multiplier": 1073741824, "left_post_shift": -1, "output_zero_point": 0, "output_min": -128, "output_max": 127, "why": "pos 2^7, shift -8 (assert edge), pre-shift 9, E=23 (min)"},
+  {"a_zero_point": 0, "b_zero_point": 0, "left_pre_shift": 9, "multiplier": 2147483392, "left_post_shift": -1, "output_zero_point": 0, "output_min": -128, "output_max": 127, "why": "mult 0x7FFFFF80 (upper bound), shift -8"},
+  {"a_zero_point": 0, "b_zero_point": 0, "left_pre_shift": 1, "multiplier": 1073741824, "left_post_shift": -1, "output_zero_point": 0, "output_min": -128, "output_max": 127, "why": "pos 0.5, shift 0 (pre/post split edge)"},
+  {"a_zero_point": 0, "b_zero_point": 0, "left_pre_shift": 3, "multiplier": 1073741824, "left_post_shift": -1, "output_zero_point": 0, "output_min": -128, "output_max": 127, "why": "pos 2, shift -2 (pre-shift 3, post 1)"},
+  {"a_zero_point": 0, "b_zero_point": 0, "left_pre_shift": 1, "multiplier": 1431655808, "left_post_shift": -1, "output_zero_point": 0, "output_min": -128, "output_max": 127, "why": "pos 2/3, shift -1 (pre-shift 2, post 1)"},
+  {"a_zero_point": 0, "b_zero_point": 0, "left_pre_shift": 4, "multiplier": 1073741824, "left_post_shift": -1, "output_zero_point": 0, "output_min": -128, "output_max": 127, "why": "pos 4, shift 2 (pure post-shift)"},
+  {"a_zero_point": -128, "b_zero_point": -128, "left_pre_shift": 1, "multiplier": 2078209920, "left_post_shift": -1, "output_zero_point": 0, "output_min": -128, "output_max": 127, "why": "gtest default scales, a/b zp -128"},
+  {"a_zero_point": 127, "b_zero_point": -128, "left_pre_shift": 5, "multiplier": 1683350144, "left_post_shift": -1, "output_zero_point": 127, "output_min": -128, "output_max": 127, "why": "gtest a_scale top, pos 12.54, shift -4"},
+  {"a_zero_point": 100, "b_zero_point": -100, "left_pre_shift": 6, "multiplier": 2048576128, "left_post_shift": -1, "output_zero_point": 3, "output_min": -128, "output_max": 127, "why": "pos 30.5, shift -6, E=25, extreme zps"},
+  {"a_zero_point": 5, "b_zero_point": -5, "left_pre_shift": 0, "multiplier": 1131184896, "left_post_shift": -9, "output_zero_point": -7, "output_min": -128, "output_max": 127, "why": "pos 2^-9.9, shift 7, E=38, mixed zps"},
+  {"a_zero_point": -128, "b_zero_point": 127, "left_pre_shift": 0, "multiplier": 1233388160, "left_post_shift": -10, "output_zero_point": -128, "output_min": -128, "output_max": 127, "why": "tiny pos, extreme zps"}
+]

@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "kind": "kernel",
+  "key": "xnnpack-rvv",
+  "title": "XNNPACK microkernels on RISC-V Vector",
+  "task": "Port XNNPACK microkernels from ARM Neon to RVV, then optimize, with every candidate gated by upstream tests, bounded formal equivalence, and hardware benchmarks. Deliverables are meant to be submitted upstream.",
+  "upstream": {
+    "repo": "https://github.com/google/XNNPACK",
+    "revision_current": "96eaa532df4826aa02c0915bc2320dc1e8e263ff",
+    "revision_saltyrn": "867d5a344790802ee067be62f572c2e2722bf6fb",
+    "license": "BSD-3-Clause"
+  },
+  "hardware": {
+    "development": "qemu-riscv64 inside portforge-rvv-host (functional RVV at VLEN 128/256/512/1024; no timing)",
+    "performance": "SiFive X280 (RVV 1.0, VLEN 512) via tt-bh-linux on a Blackhole card; OPTIONAL - every gate must also pass with x280=False for sites without the board"
+  },
+  "gates": {
+    "xnnpack_tests": "candidate registered next to its template kernel; gtest binary green at VLEN 128/256/512/1024 (QEMU) and on the X280 when present",
+    "formal_equivalence": "cvc5 (SALTyRN harness) ALL_PASSED in configs mode with parameters produced by XNNPACK's own init code, vs the Neon source kernel; integer families are bit-exact, float families use the fixture's FP-aware equality",
+    "differential": "same digest vs scalar on every platform for families with a driver; new float families need a special-values driver (NaN, +/-0, +/-inf, subnormals)",
+    "performance": "on the X280 (or FireSim where noted): faster than the scalar ukernel by a clear margin, and not slower than the fastest existing hand-written RVV variant of the family unless the CONTRACT explains why upstream should still want it"
+  },
+  "anti_cheat": [
+    "the kernel must handle the full envelope XNNPACK's init can produce, not the test vectors",
+    "no reading test sources, fixtures, seeds, or oracle files to special-case values",
+    "vector instructions must do the data movement and arithmetic of the hot loop; no scalar fallback that only shifts the loop into the harness",
+    "timings are taken as the harness runs them; no warming tricks, no shape detection that changes semantics"
+  ],
+  "deliverable": "kernel C file + registry line + (for upstream) generator-template integration, following the layout of the three merged RVV PRs (#9879, #9974, #9996)"
+}

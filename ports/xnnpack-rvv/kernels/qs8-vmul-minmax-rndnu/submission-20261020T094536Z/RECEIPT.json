@@ -1,0 +1,8 @@
+{
+ "family": "qs8-vmul-minmax-rndnu",
+ "kernel": "/home/abror/portforge-cpu/repo/ports/xnnpack-rvv/kernels/qs8-vmul-minmax-rndnu/kernel.c",
+ "name": "xnn_qs8_vmul_minmax_rndnu_ukernel__rvv_pf1",
+ "kernel_sha256": "a3f7a6516b0b682e88ce8fa33706ec99813527615ec135c70aa2cfb9910c7e20",
+ "utc": "2026-10-20T09:45:36.820338+00:00",
+ "note": "Campaign #3, new-coverage port (first RVV variant of the family). Gate 1: 15/15 gtests at QEMU VLEN 128/256/512/1024 + X280. Gate 2: exhaustive differential - all 256x256 int8 pairs x 14 producer-true configs (real init), byte-exact vs literal-Neon oracle, 4 QEMU VLENs + X280 native (SMT verify unavailable: evaluate.py:125 NameError on neon_text path + no SALTyRN fixture for this stem; documented in REPORT.md). Gate 3 (X280): 1.38 cyc/el cache-resident = 29.4x vs scalar oracle (GCC autovec fails on this loop: 0 vector instrs at -O3), at the 3-byte/elem bandwidth wall at 16M; no peer RVV variant exists. Upstream PR needs: the .inc row + 3-line ARM-guard widening (params-init-riscv.patch) + wiring the unwired gtest target. Full receipts in kernels/qs8-vmul-minmax-rndnu/REPORT.md."
+}

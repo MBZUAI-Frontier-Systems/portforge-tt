@@ -1,0 +1,26 @@
+0000000000000000 <xnn_qs8_vmul_minmax_rndnu_ukernel__rvv_pf1>:
+   0:	1141                	addi	sp,sp,-16
+   2:	e406                	sd	ra,8(sp)
+   4:	c545                	beqz	a0,ac <.L13>
+   6:	14058d63          	beqz	a1,160 <.L14>
+   a:	12060963          	beqz	a2,13c <.L15>
+   e:	10068563          	beqz	a3,118 <.L16>
+  12:	00472883          	lw	a7,4(a4)
+  16:	475c                	lw	a5,12(a4)
+  18:	487d                	li	a6,31
+  1a:	4118083b          	subw	a6,a6,a7
+  1e:	40f8083b          	subw	a6,a6,a5
+  22:	fe98089b          	addiw	a7,a6,-23
+  26:	47dd                	li	a5,23
+  28:	00070e83          	lb	t4,0(a4)
+  2c:	00170f03          	lb	t5,1(a4)
+  30:	0d17e263          	bltu	a5,a7,f4 <.L17>
+  34:	00872883          	lw	a7,8(a4)
+  38:	400007b7          	lui	a5,0x40000
+  3c:	08f8ca63          	blt	a7,a5,d0 <.L18>
+  40:	01071e03          	lh	t3,16(a4)
+  44:	01270303          	lb	t1,18(a4)
+  48:	01370703          	lb	a4,19(a4)
+
+24
+0

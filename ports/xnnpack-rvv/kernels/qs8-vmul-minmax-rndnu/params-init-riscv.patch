@@ -1,0 +1,51 @@
+diff --git a/src/microparams-init.c b/src/microparams-init.c
+index d4162ff1b..7a16321cb 100644
+--- a/src/microparams-init.c
++++ b/src/microparams-init.c
+@@ -1071,7 +1071,7 @@ size_t xnn_init_qs8_mul_minmax_scalar_params(
+   return sizeof(uparams->scalar);
+ }
+ 
+-#if XNN_ARCH_ARM || XNN_ARCH_ARM64
++#if XNN_ARCH_ARM || XNN_ARCH_ARM64 || XNN_ARCH_RISCV
+ size_t xnn_init_qs8_mul_minmax_rndnu_neon_params(
+     union xnn_qs8_mul_minmax_params* uparams,
+     const struct xnn_quantization_params* a_quantization,
+diff --git a/src/xnnpack/microparams-init.h b/src/xnnpack/microparams-init.h
+index b2cbae302..ac7188e36 100644
+--- a/src/xnnpack/microparams-init.h
++++ b/src/xnnpack/microparams-init.h
+@@ -224,7 +224,7 @@ XNN_INTERNAL size_t xnn_init_qu8_add_minmax_scalar_params(
+ 
+ DECLARE_INIT_QS8_MUL_MINMAX_PARAMS_FUNCTION(
+     xnn_init_qs8_mul_minmax_scalar_params)
+-#if XNN_ARCH_ARM || XNN_ARCH_ARM64
++#if XNN_ARCH_ARM || XNN_ARCH_ARM64 || XNN_ARCH_RISCV
+ DECLARE_INIT_QS8_MUL_MINMAX_PARAMS_FUNCTION(
+     xnn_init_qs8_mul_minmax_rndnu_neon_params)
+ #endif  // XNN_ARCH_ARM || XNN_ARCH_ARM64
+diff --git a/src/xnnpack/microparams.h b/src/xnnpack/microparams.h
+index 4a5b82c97..73ed1b059 100644
+--- a/src/xnnpack/microparams.h
++++ b/src/xnnpack/microparams.h
+@@ -356,7 +356,7 @@ union xnn_qs8_mul_minmax_params {
+     int8_t output_min;
+     int8_t output_max;
+   } scalar;
+-#if XNN_ARCH_ARM || XNN_ARCH_ARM64
++#if XNN_ARCH_ARM || XNN_ARCH_ARM64 || XNN_ARCH_RISCV
+   struct {
+     int8_t a_zero_point;
+     int8_t b_zero_point;
+diff --git a/test/CMakeLists.txt b/test/CMakeLists.txt
+index b5f017b90..fd8948c5e 100644
+--- a/test/CMakeLists.txt
++++ b/test/CMakeLists.txt
+@@ -312,6 +312,7 @@ SET(MICROKERNEL_VBINARY_UNIT_TESTS
+     qs8-vadd-minmax
+     qs8-vaddc-minmax
+     qs8-vmul-minmax-fp32
++    qs8-vmul-minmax-rndnu
+     qs8-vmulc-minmax-fp32
+     qs8-vprelu
+     qs8-vpreluc

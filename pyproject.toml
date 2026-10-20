@@ -32,10 +32,11 @@ dev = ["pytest>=7.0", "pre-commit>=3.0"]
 portforge = "portforge_tt.portforge_loop:main"
 
 [tool.setuptools]
-packages = ["portforge_tt", "portforge_tt.agents"]
+packages = ["portforge_tt", "portforge_tt.agents", "portforge_tt.cpu"]
 
 [tool.setuptools.package-data]
 portforge_tt = ["prompts/*.md", "guides/*.md"]
+"portforge_tt.cpu" = ["data/*.json", "docker/Dockerfile", "tools/*", "README.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

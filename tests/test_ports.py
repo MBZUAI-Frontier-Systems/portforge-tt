@@ -13,7 +13,9 @@ from cluster import identity
 
 HARNESS = support.HARNESS
 PACKS = sorted(path for path in (support.ROOT / "ports").iterdir() if (path / "port.json").is_file())
-REAL = [path for path in PACKS if path.name != "template"]
+KERNEL_PACKS = [path for path in PACKS
+                if json.loads((path / "port.json").read_text()).get("kind") == "kernel"]
+REAL = [path for path in PACKS if path.name != "template" and path not in KERNEL_PACKS]
 
 
 def pinned_corpus_hash(pack):
@@ -26,6 +28,12 @@ class PortPackTests(unittest.TestCase):
         self.assertEqual({path.name for path in REAL}, {"chronos2", "esm2", "nllb", "parakeet", "pocket_tts"})
         for pack in PACKS:
             with self.subTest(pack=pack.name), tempfile.TemporaryDirectory() as directory:
+                if pack in KERNEL_PACKS:
+                    spec = json.loads((pack / "port.json").read_text())
+                    self.assertEqual(spec["kind"], "kernel")
+                    for doc in ("CONTRACT.md", "TASK.md", "README.md"):
+                        self.assertTrue((pack / doc).is_file(), doc)
+                    continue
                 loaded = port.load_port(pack)
                 self.assertIn(loaded["key"], loaded["delivery_models"])
                 self.assertIn("CONTRACT.md", loaded["docs"])
@@ -94,14 +102,18 @@ class PortPackTests(unittest.TestCase):
                              r"google_compute|tt-blackhole-\d")
         # RFC 5737 documentation ranges are the intended placeholders in test fixtures.
         documentation = ("192.0.2.", "198.51.100.", "203.0.113.")
+        # tt-metal is a vendored upstream checkout and paper/ is the manuscript;
+        # this check governs portforge's own tree. portforge-cpu.json is the
+        # operator's untracked planning export.
         excluded = {".git", ".venv", "venv", "runs", "assets", "dist", "build",
-                    "__pycache__", "portforge_tt.egg-info"}
+                    "__pycache__", "portforge_tt.egg-info", "tt-metal", "paper"}
+        skipped_names = {"corpus.json", "README.md", "portforge-cpu.json"}
         for path in support.ROOT.rglob("*"):
             if not path.is_file() or path.suffix not in (".py", ".md", ".json", ".yaml", ".sh"):
                 continue
             if any(part in excluded for part in path.parts):
                 continue
-            if path.name == "corpus.json" or path.name == "README.md" or path == Path(__file__):
+            if path.name in skipped_names or path == Path(__file__):
                 continue
             for match in pattern.finditer(path.read_text()):
                 if match.group(0) == "127.0.0.1" or match.group(0).startswith(documentation):
