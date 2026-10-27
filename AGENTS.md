@@ -75,9 +75,19 @@ every pack and checks hashes, suites, tool names and site-specific leaks.
 **Ask**: which TT host and which reference host (GPU preferred) to use, SSH users and
 keys, and which cards the campaign may lease.
 
-- TT host: a built TT-Metal checkout, its commit, a Python environment with
-  `ttnn`, `torch`, `numpy`, `pytest`, `bwrap`, and the checkpoint downloaded with
-  `python -m portforge_tt.models --download`. List the cards with `ls /dev/tenstorrent` or `tt-smi`.
+- TT host: keep everything in one directory, `~/portforge-tt`, with a built
+  TT-Metal checkout in `tt-metal/` and its `python_env/` (`ttnn`, `torch`,
+  `numpy`, `pytest`), plus `bwrap` on the host. No sudo is needed when the
+  system packages are already there:
+  ```sh
+  git clone --filter=blob:none https://github.com/tenstorrent/tt-metal.git ~/portforge-tt/tt-metal
+  cd ~/portforge-tt/tt-metal && git checkout --detach <commit> && git submodule update --init --recursive
+  ./build_metal.sh && ./create_venv.sh
+  scripts/bundle_python_into_venv.sh python_env --force   # interpreter inside the venv, so the sandbox can mount it
+  ```
+  Download each delivery model's checkpoint from a copy of this repo on the host:
+  `~/portforge-tt/tt-metal/python_env/bin/python -m portforge_tt.models <key> ~/portforge-tt/checkpoints/<key> --download --registry ports/<name>/models.json`.
+  List the cards with `ls /sys/class/tenstorrent` or `tt-smi`.
 - Reference host: copy `port.json` and run `bash setup_reference.sh port.json`.
 - Fill a copy of `cluster.yaml`; keep it out of version control.
 - Reference smoke on the reference host, once, before any campaign:

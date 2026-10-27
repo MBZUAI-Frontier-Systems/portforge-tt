@@ -33,17 +33,18 @@ available_node_types:
       reference: 1
 porting:
   tt:
-    work_dir: /home/<tt-user>/portforge          # per-run archives, leases and card health
-    python: /home/<tt-user>/tt-metal/python_env/bin/python  # imports ttnn, torch, numpy, pytest
-    metal: /home/<tt-user>/tt-metal               # built TT-Metal checkout (mounted read-only)
+    work_dir: /home/<tt-user>/portforge-tt       # per-run archives, leases and card health
+    python: /home/<tt-user>/portforge-tt/tt-metal/python_env/bin/python  # imports ttnn, torch, numpy, pytest
+    metal: /home/<tt-user>/portforge-tt/tt-metal  # built TT-Metal checkout (mounted read-only)
     metal_commit: <tt-metal-commit-sha>           # must match `git -C <metal> rev-parse HEAD`
     weights_by_model:                             # one entry per pack delivery model
-      <model-key>: /home/<tt-user>/portforge/checkpoints/<model-key>
-    health_dir: /home/<tt-user>/portforge/card-health
-    lease_dir: /home/<tt-user>/portforge
+      <model-key>: /home/<tt-user>/portforge-tt/checkpoints/<model-key>
+    health_dir: /home/<tt-user>/portforge-tt/card-health
+    lease_dir: /home/<tt-user>/portforge-tt
     runtime_mounts:       # directories the TT Python environment needs inside the sandbox
     - /opt/tenstorrent
-    - /home/<tt-user>/tt-metal/python_env
+    - /opt/openmpi-v5.0.7-ulfm                    # TT-Metal links libmpi from here (`ldd build_Release/lib/libtt_metal.so`)
+    - /home/<tt-user>/portforge-tt/tt-metal/python_env  # interpreter bundled in; else also mount where it lives
     cards:                # PCI addresses the runner may lease (see `ls /dev/tenstorrent`, tt-smi)
     - '0000:00:00.0'
     host_memory_limit_bytes: 34359738368          # per-job host RSS limit (1-128 GiB)

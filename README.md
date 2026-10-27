@@ -41,6 +41,14 @@ Blackhole p150, tt-metal `fd80faa3`, FP32 references on an A100:
 
 Full-corpus misses are bf16 near-tie logits; each pack's `CONTRACT.md` has the device evidence and the rejected fp32/mixed-precision variants. Chronos-2 and ESM-2 ship their corpora in the pack; the NLLB and Parakeet corpora rebuild from the provenance in `ports/<name>/SOURCES.md`. Runs archived before the CHIA-free rewrite are inspectable but not resumable.
 
+## Paper
+
+**PortForge-TT: Enabling Agentic Cross-Platform Model Adaptation using CHIA**
+Abror Shopulatov, Dongning Ma, Abdulrahman Mahmoud (MBZUAI).
+A³ Workshop (Agentic Approaches to Architecture) @ MICRO 2026.
+
+Preprint coming soon; the link will appear here.
+
 ## License
 
 BSD-3-Clause, see [LICENSE](LICENSE). The agent CLI wrappers, error taxonomy
