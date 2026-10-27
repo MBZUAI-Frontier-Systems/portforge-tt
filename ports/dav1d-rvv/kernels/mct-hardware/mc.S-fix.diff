@@ -1,0 +1,82 @@
+diff --git a/src/riscv/64/mc.S b/src/riscv/64/mc.S
+index 977fdb3d..f707038a 100644
+--- a/src/riscv/64/mc.S
++++ b/src/riscv/64/mc.S
+@@ -1067,7 +1067,24 @@ endfunc
+ function \type\()_filter_row_4tap_rvv, ext="v,zba,zbb"
+   add t3, \chunk_w, \src
+   vle8.v v30, (\src)
+-  ld t3, (t3)  // t3 - right end (incl. padding) of the row
++  // t3 - right end (incl. padding) of the row. The address is generally
++  // not 8-byte aligned, and misaligned scalar loads trap on some cores
++  // (SiFive X280 raises load-address-misaligned even though the Linux
++  // kernel on other boards emulates them), so load the two aligned words
++  // around it and funnel-shift the 8 padding bytes into place.
++  andi t0, t3, -8
++  ld t1, 0(t0)
++  ld t2, 8(t0)
++  sub t4, t3, t0
++  sltu t3, zero, t4  // t3 - 1 iff the address was misaligned, else 0
++  slli t4, t4, 3     // t4 - misalignment in bits
++  srl t1, t1, t4     // low part of the padding
++  neg t4, t4
++  addi t4, t4, 64    // 64 - misalignment
++  sll t2, t2, t4     // high part; a whole word when aligned (t4 == 0 -> 64)
++  neg t3, t3         // aligned: 0, misaligned: all-ones
++  and t2, t2, t3     // keep the high part only when it is really needed
++  or t3, t1, t2      // t3 - the 8 padding bytes, LSB first
+   vzext.vf2 v28, v30  // v28 - left padding + most of row
+   add \src, \src, \s_strd
+ 
+@@ -1080,7 +1097,24 @@ endfunc
+ function \type\()_filter_row_6tap_rvv, ext="v,zba,zbb"
+   add t3, \chunk_w, \src
+   vle8.v v30, (\src)
+-  ld t3, (t3)  // t3 - right end (incl. padding) of the row
++  // t3 - right end (incl. padding) of the row. The address is generally
++  // not 8-byte aligned, and misaligned scalar loads trap on some cores
++  // (SiFive X280 raises load-address-misaligned even though the Linux
++  // kernel on other boards emulates them), so load the two aligned words
++  // around it and funnel-shift the 8 padding bytes into place.
++  andi t0, t3, -8
++  ld t1, 0(t0)
++  ld t2, 8(t0)
++  sub t4, t3, t0
++  sltu t3, zero, t4  // t3 - 1 iff the address was misaligned, else 0
++  slli t4, t4, 3     // t4 - misalignment in bits
++  srl t1, t1, t4     // low part of the padding
++  neg t4, t4
++  addi t4, t4, 64    // 64 - misalignment
++  sll t2, t2, t4     // high part; a whole word when aligned (t4 == 0 -> 64)
++  neg t3, t3         // aligned: 0, misaligned: all-ones
++  and t2, t2, t3     // keep the high part only when it is really needed
++  or t3, t1, t2      // t3 - the 8 padding bytes, LSB first
+   vzext.vf2 v28, v30  // v28 - left padding + most of row
+   add \src, \src, \s_strd
+ 
+@@ -1093,7 +1127,24 @@ endfunc
+ function \type\()_filter_row_8tap_rvv, ext="v,zba,zbb"
+   add t3, \chunk_w, \src
+   vle8.v v30, (\src)
+-  ld t3, (t3)  // t3 - right end (incl. padding) of the row
++  // t3 - right end (incl. padding) of the row. The address is generally
++  // not 8-byte aligned, and misaligned scalar loads trap on some cores
++  // (SiFive X280 raises load-address-misaligned even though the Linux
++  // kernel on other boards emulates them), so load the two aligned words
++  // around it and funnel-shift the 8 padding bytes into place.
++  andi t0, t3, -8
++  ld t1, 0(t0)
++  ld t2, 8(t0)
++  sub t4, t3, t0
++  sltu t3, zero, t4  // t3 - 1 iff the address was misaligned, else 0
++  slli t4, t4, 3     // t4 - misalignment in bits
++  srl t1, t1, t4     // low part of the padding
++  neg t4, t4
++  addi t4, t4, 64    // 64 - misalignment
++  sll t2, t2, t4     // high part; a whole word when aligned (t4 == 0 -> 64)
++  neg t3, t3         // aligned: 0, misaligned: all-ones
++  and t2, t2, t3     // keep the high part only when it is really needed
++  or t3, t1, t2      // t3 - the 8 padding bytes, LSB first
+   vzext.vf2 v28, v30  // v28 - left padding + most of row
+   add \src, \src, \s_strd
+ 

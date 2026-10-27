@@ -1,0 +1,4 @@
+vlen 128: checkasm: all 25 tests passed (0 FAILURE lines)
+vlen 256: checkasm: all 25 tests passed (0 FAILURE lines)
+vlen 512: checkasm: all 25 tests passed (0 FAILURE lines)
+vlen 1024: checkasm: all 25 tests passed (0 FAILURE lines)

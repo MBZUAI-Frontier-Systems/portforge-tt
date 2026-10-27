@@ -1,0 +1,34 @@
+diff --git a/src/loopfilter_tmpl.c b/src/loopfilter_tmpl.c
+index fdfd637a..2671e286 100644
+--- a/src/loopfilter_tmpl.c
++++ b/src/loopfilter_tmpl.c
+@@ -249,6 +249,8 @@ static void loop_filter_v_sb128uv_c(pixel *dst, const ptrdiff_t stride,
+ #include "src/arm/loopfilter.h"
+ #elif ARCH_LOONGARCH64
+ #include "src/loongarch/loopfilter.h"
++#elif ARCH_RISCV
++#include "src/riscv/loopfilter.h"
+ #elif ARCH_PPC64LE
+ #include "src/ppc/loopfilter.h"
+ #elif ARCH_X86
+@@ -267,6 +269,8 @@ COLD void bitfn(dav1d_loop_filter_dsp_init)(Dav1dLoopFilterDSPContext *const c)
+     loop_filter_dsp_init_arm(c);
+ #elif ARCH_LOONGARCH64
+     loop_filter_dsp_init_loongarch(c);
++#elif ARCH_RISCV
++    loop_filter_dsp_init_riscv(c);
+ #elif ARCH_PPC64LE
+     loop_filter_dsp_init_ppc(c);
+ #elif ARCH_X86
+diff --git a/src/meson.build b/src/meson.build
+index 61870b40..1915bd23 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -280,6 +280,7 @@ if is_asm_enabled
+                     'riscv/64/filmgrain.S',
+                     'riscv/64/ipred.S',
+                     'riscv/64/itx.S',
++                    'riscv/64/loopfilter.S',
+                     'riscv/64/mc.S',
+                 )
+             endif

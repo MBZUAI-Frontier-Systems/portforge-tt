@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "kind": "kernel",
+  "key": "dav1d-rvv",
+  "title": "dav1d AV1 decoder kernels on RISC-V Vector",
+  "task": "Port dav1d's hand-written assembly DSP kernels to RVV (new coverage where no RVV exists, e.g. loopfilter/looprestoration; investigation and fixes where RVV exists but misbehaves on hardware), validated by checkasm on QEMU and real RVV hardware, benchmarked on the X280.",
+  "upstream": {
+    "repo": "https://code.videolan.org/videolan/dav1d",
+    "revision": "d7a83f6e0f9360188a38ceae0883f3d132d87b47",
+    "checkasm": "meson subproject videolan/checkasm v1.2.0 (fetched automatically on first configure)",
+    "license": "BSD-2-Clause"
+  },
+  "hardware": {
+    "development": "qemu-riscv64 inside portforge-rvv-host at VLEN 128/256/512/1024 (functional)",
+    "performance": "SiFive X280 (RVV 1.0, VLEN 512) on the Blackhole card via tt-bh-linux; checkasm times through linux-perf on this kernel. Board builds must use plain rv64gcv (zba/zbb/zbs builds SIGILL). OPTIONAL - all correctness gates run without the board.",
+    "known_instability": "the X280 guest Linux (7.0.0-tt-blackhole CI kernel) panics and wedges the card every few hours of use; boot() recovers automatically. Treat unexpected 'connection refused' as 'board wedged', not a tool bug."
+  },
+  "gates": {
+    "checkasm": "the family's checkasm tests green under QEMU at VLEN 128/256/512/1024 and natively on the X280 (bit-exact vs the C reference - dav1d's asm contract)",
+    "differential": "targeted edge-case drivers for the ported function (alignments, widths, zero-point/sign boundaries) beyond checkasm's random cases",
+    "formal": "SMT shims do not apply (hand-written assembly); where the algorithm is tractable, a paper proof of the register-level derivation + property tests substitute; say so explicitly in REPORT.md",
+    "benchmark": "checkasm --bench on the X280 (cycles per call, linux-perf timing source) vs the C reference and vs any existing RVV implementation; working-set effects reported where the function is memory-sensitive"
+  },
+  "anti_cheat": [
+    "the asm must be bit-exact to the C reference for every input checkasm and the differential drivers can generate - dav1d's contract leaves no numerical tolerance",
+    "no modifying checkasm, the C reference, or the trusted tooling to make failures disappear",
+    "the vector unit must do the data movement and arithmetic of the kernel; no hidden scalar hot loop",
+    "random seeds used during development must be recorded; submission runs must include fresh unseen seeds"
+  ],
+  "deliverable": "asm file(s) in src/riscv/64/ + per-family init line(s) in src/riscv/<dsp>.h + REPORT.md, shaped for a dav1d merge request (meson wiring included, upstream code style)"
+}

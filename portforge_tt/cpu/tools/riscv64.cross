@@ -1,0 +1,16 @@
+# riscv64 cross-build for meson projects (dav1d), inside portforge-rvv-host.
+[binaries]
+c = 'riscv64-linux-gnu-gcc-14'
+cpp = 'riscv64-linux-gnu-g++-14'
+ar = 'riscv64-linux-gnu-ar'
+nm = 'riscv64-linux-gnu-nm'
+strip = 'riscv64-linux-gnu-strip'
+
+[host_machine]
+system = 'linux'
+cpu_family = 'riscv64'
+cpu = 'riscv64'
+endian = 'little'
+
+[properties]
+needs_exe_wrapper = true

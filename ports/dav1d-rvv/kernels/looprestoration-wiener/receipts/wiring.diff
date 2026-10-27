@@ -1,0 +1,34 @@
+diff --git a/src/looprestoration_tmpl.c b/src/looprestoration_tmpl.c
+index 860e8ecb..0da940ef 100644
+--- a/src/looprestoration_tmpl.c
++++ b/src/looprestoration_tmpl.c
+@@ -1351,6 +1351,8 @@ vert_1:
+ #include "src/loongarch/looprestoration.h"
+ #elif ARCH_PPC64LE
+ #include "src/ppc/looprestoration.h"
++#elif ARCH_RISCV
++#include "src/riscv/looprestoration.h"
+ #elif ARCH_X86
+ #include "src/x86/looprestoration.h"
+ #endif
+@@ -1371,6 +1373,8 @@ COLD void bitfn(dav1d_loop_restoration_dsp_init)(Dav1dLoopRestorationDSPContext
+     loop_restoration_dsp_init_loongarch(c, bpc);
+ #elif ARCH_PPC64LE
+     loop_restoration_dsp_init_ppc(c, bpc);
++#elif ARCH_RISCV
++    loop_restoration_dsp_init_riscv(c);
+ #elif ARCH_X86
+     loop_restoration_dsp_init_x86(c, bpc);
+ #endif
+diff --git a/src/meson.build b/src/meson.build
+index 61870b40..111e700f 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -280,6 +280,7 @@ if is_asm_enabled
+                     'riscv/64/filmgrain.S',
+                     'riscv/64/ipred.S',
+                     'riscv/64/itx.S',
++                    'riscv/64/looprestoration.S',
+                     'riscv/64/mc.S',
+                 )
+             endif

@@ -21,6 +21,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libgmp-dev \
  && rm -rf /var/lib/apt/lists/*
 
+# meson for dav1d-style meson-built projects (dav1d libdav1d + checkasm)
+RUN apt-get update && apt-get install -y --no-install-recommends meson \
+ && rm -rf /var/lib/apt/lists/*
+
 # cvc5 1.3.2, static GPL build: SALTyRN's CMake links cln, glpk and CoCoA from it.
 ARG CVC5_ZIP=cvc5-Linux-x86_64-static-gpl.zip
 ARG CVC5_SHA256=30abf22d8042f3c4d3eb1120c595abd461f92f276a6d1264895fb4403b5fb3fd

@@ -1,0 +1,319 @@
+"""Apply the campaign-4 VL=16 16x16 itx patch to a dav1d worktree's itx.S.
+
+Changes:
+1. rename upstream inv_txfm_add_16x16_rvv -> inv_txfm_add_16x16_narrow_rvv
+   (body kept verbatim; used for VLEN<256)
+2. rewire def_fn_16x16's la lines to the new wide helpers
+3. insert def_horz_16w macro + wide horz/vert helpers + the vlenb dispatcher
+
+Emits <tree>/../c4-itx16-wide.diff for the campaign dir.
+"""
+import subprocess
+import sys
+from pathlib import Path
+
+tree = Path(sys.argv[1])
+f = tree / "src" / "riscv" / "64" / "itx.S"
+text = f.read_text()
+
+# --- 1. rename the upstream (VLEN<256) driver -------------------------------
+old_fn = "function inv_txfm_add_16x16_rvv, export=1, ext=v\n  csrw vxrm, zero\n  vsetivli zero, 8, e16, m1, ta, ma"
+assert text.count(old_fn) == 1
+text = text.replace(old_fn,
+    "function inv_txfm_add_16x16_narrow_rvv, export=1, ext=v\n  csrw vxrm, zero\n  vsetivli zero, 8, e16, m1, ta, ma")
+
+# --- 2. rewire def_fn_16x16: per-driver helper wiring ------------------------
+old_la = """.ifc \\txfm1, identity
+  la a6, inv_txfm_horz_identity_16x8_rvv
+.else
+  la a6, inv_txfm_horz_16x8_rvv
+  la a4, inv_\\txfm1\\()_e16_x16_rvv
+.endif
+  la a5, inv_\\txfm2\\()_e16_x16_rvv
+  li a7, \\eob_half
+  j inv_txfm_add_16x16_rvv"""
+assert text.count(old_la) == 1
+text = text.replace(old_la, """  csrr t2, vlenb
+  li t0, 32
+  bge t2, t0, 2f
+  // VLEN < 256: upstream vl=8 driver and helpers
+.ifc \\txfm1, identity
+  la a6, inv_txfm_horz_identity_16x8_rvv
+.else
+  la a6, inv_txfm_horz_16x8_rvv
+  la a4, inv_\\txfm1\\()_e16_x16_rvv
+.endif
+  la a5, inv_\\txfm2\\()_e16_x16_rvv
+  li a7, \\eob_half
+  j inv_txfm_add_16x16_narrow_rvv
+2:
+  // VLEN >= 256: wide vl=16 driver and helpers
+.ifc \\txfm1, identity
+  la a6, inv_txfm_horz_identity_16_rvv
+.else
+  la a6, inv_txfm_horz_16_rvv
+  la a4, inv_\\txfm1\\()_e16_x16_rvv
+.endif
+  la a5, inv_\\txfm2\\()_e16_x16_rvv
+  li a7, \\eob_half
+  j inv_txfm_add_16x16_wide_rvv""")
+
+# --- 3. insert the wide path right before the def_fn_16x16 macro -------------
+NEW = r"""
+/*
+ * 16x16 path for VLEN >= 256.
+ *
+ * The VLEN<256 fallback above runs every 1-D transform invocation at
+ * vl=8/e16/m1 (two row halves), so 16x16 costs four 1-D invocations and
+ * every vector op uses 8 of VLEN/16 lanes.  Here the whole 16x16 block
+ * lives in v0-v15 at vl=16/e16/m1 (column j in v_j for the horizontal
+ * pass, row j after the transpose through the stack buffer), which halves
+ * the number of 1-D invocations and doubles the lanes per op.  The 1-D
+ * e16_x16 kernels are vtype-agnostic (all elementwise, no vsetvli inside),
+ * so they run unchanged at vl=16; their widening temporaries grow from
+ * half-used m2 groups to full-width m2 groups but the register map is
+ * identical.
+ */
+.macro def_horz_16w variant
+function inv_txfm_horz\variant\()_16_rvv, export=1, ext=v
+  // sparse path (eob < t3): only the top 8 coefficient rows are read by
+  // the C reference, so run the 1-D transform at vl=8 on the top half
+  // exactly like the upstream driver and zero the bottom stack rows.
+  // (At vl=16 the same pass would spend half of every widened op on
+  // lanes that the output-lane zeroing discards again.)
+  bge a3, t3, 1f
+  vsetivli zero, 8, e16, m1, ta, ma
+  vmv.v.x v16, zero
+  vle16.v v0, (t4)
+  vse16.v v16, (t4)
+.irp i, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
+  add t4, t4, t6
+  vle16.v v\i, (t4)
+  vse16.v v16, (t4)
+.endr
+.ifc \variant, _identity
+  li t1, 2*(5793-4096)*8
+.irp i, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
+  vsmul.vx v16, v\i, t1
+  vsra.vi v16, v16, 1
+  vaadd.vv v\i, v\i, v16
+.endr
+.else
+  jalr t0, a4
+.irp i, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
+  vssra.vi v\i, v\i, 2
+.endr
+.endif
+  vsse16.v v0, (t5), t6
+.irp i, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
+  addi t5, t5, 2
+  vsse16.v v\i, (t5), t6
+.endr
+  // zero the bottom half of the stack buffer (horz output rows 8..15)
+  li t0, 128
+  vsetvli zero, t0, e16, m8, ta, ma
+  vmv.v.i v8, 0
+  addi t0, sp, 256
+  vse16.v v8, 0(t0)
+  vsetivli zero, 16, e16, m1, ta, ma
+  jr a7
+1:
+  // full path at vl=16
+  vmv.v.x v16, zero
+  vle16.v v0, (t4)
+  vse16.v v16, (t4)
+.irp i, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
+  add t4, t4, t6
+  vle16.v v\i, (t4)
+  vse16.v v16, (t4)
+.endr
+.ifc \variant, _identity
+  li t1, 2*(5793-4096)*8
+.irp i, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
+  vsmul.vx v16, v\i, t1
+  vsra.vi v16, v16, 1
+  vaadd.vv v\i, v\i, v16
+.endr
+.else
+  jalr t0, a4
+.irp i, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
+  vssra.vi v\i, v\i, 2
+.endr
+.endif
+  vsse16.v v0, (t5), t6
+.irp i, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
+  addi t5, t5, 2
+  vsse16.v v\i, (t5), t6
+.endr
+  jr a7
+endfunc
+.endm
+
+def_horz_16w _identity
+def_horz_16w
+
+// v_j = row j (16 columns); 1-D transform down the columns, then add to
+// dst.  The dst epilog is the upstream vert epilog shape (in-place
+// widening add, vmax against zero, narrowing clip) run at vl=16 in two
+// 8-row chunks: at e8/mf2 every operand is a single register, so there
+// are no register-group alignment or scratch hazards, and vl=16 covers
+// all 16 dst columns per row.
+function inv_txfm_add_vert_16_rvv, export=1, ext=v
+  vsetivli zero, 16, e16, m1, ta, ma
+
+  vle16.v v0, (t4)
+.irp i, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
+  add t4, t4, t6
+  vle16.v v\i, (t4)
+.endr
+
+  jalr t0, a5
+
+.irp i, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
+  vssra.vi v\i, v\i, 4
+.endr
+
+  vsetivli zero, 16, e8, mf2, ta, ma
+  vle8.v v16, (t5)
+  add t0, t5, a1
+  vle8.v v17, (t0)
+  add t0, t0, a1
+  vle8.v v18, (t0)
+  add t0, t0, a1
+  vle8.v v19, (t0)
+  add t0, t0, a1
+  vle8.v v20, (t0)
+  add t0, t0, a1
+  vle8.v v21, (t0)
+  add t0, t0, a1
+  vle8.v v22, (t0)
+  add t0, t0, a1
+  vle8.v v23, (t0)
+
+  vwaddu.wv v0, v0, v16
+  vwaddu.wv v1, v1, v17
+  vwaddu.wv v2, v2, v18
+  vwaddu.wv v3, v3, v19
+  vwaddu.wv v4, v4, v20
+  vwaddu.wv v5, v5, v21
+  vwaddu.wv v6, v6, v22
+  vwaddu.wv v7, v7, v23
+
+  vsetivli zero, 16, e16, m1, ta, ma
+.irp i, 0, 1, 2, 3, 4, 5, 6, 7
+  vmax.vx v\i, v\i, zero
+.endr
+  vsetivli zero, 16, e8, mf2, ta, ma
+  vnclipu.wi v16, v0, 0
+  vnclipu.wi v17, v1, 0
+  vnclipu.wi v18, v2, 0
+  vnclipu.wi v19, v3, 0
+  vnclipu.wi v20, v4, 0
+  vnclipu.wi v21, v5, 0
+  vnclipu.wi v22, v6, 0
+  vnclipu.wi v23, v7, 0
+
+  vse8.v v16, (t5)
+  add t5, t5, a1
+  vse8.v v17, (t5)
+  add t5, t5, a1
+  vse8.v v18, (t5)
+  add t5, t5, a1
+  vse8.v v19, (t5)
+  add t5, t5, a1
+  vse8.v v20, (t5)
+  add t5, t5, a1
+  vse8.v v21, (t5)
+  add t5, t5, a1
+  vse8.v v22, (t5)
+  add t5, t5, a1
+  vse8.v v23, (t5)
+
+  add t0, t5, a1
+  vle8.v v16, (t0)
+  add t0, t0, a1
+  vle8.v v17, (t0)
+  add t0, t0, a1
+  vle8.v v18, (t0)
+  add t0, t0, a1
+  vle8.v v19, (t0)
+  add t0, t0, a1
+  vle8.v v20, (t0)
+  add t0, t0, a1
+  vle8.v v21, (t0)
+  add t0, t0, a1
+  vle8.v v22, (t0)
+  add t0, t0, a1
+  vle8.v v23, (t0)
+
+  vwaddu.wv v8, v8, v16
+  vwaddu.wv v9, v9, v17
+  vwaddu.wv v10, v10, v18
+  vwaddu.wv v11, v11, v19
+  vwaddu.wv v12, v12, v20
+  vwaddu.wv v13, v13, v21
+  vwaddu.wv v14, v14, v22
+  vwaddu.wv v15, v15, v23
+
+  vsetivli zero, 16, e16, m1, ta, ma
+.irp i, 8, 9, 10, 11, 12, 13, 14, 15
+  vmax.vx v\i, v\i, zero
+.endr
+  vsetivli zero, 16, e8, mf2, ta, ma
+  vnclipu.wi v16, v8, 0
+  vnclipu.wi v17, v9, 0
+  vnclipu.wi v18, v10, 0
+  vnclipu.wi v19, v11, 0
+  vnclipu.wi v20, v12, 0
+  vnclipu.wi v21, v13, 0
+  vnclipu.wi v22, v14, 0
+  vnclipu.wi v23, v15, 0
+
+  add t5, t5, a1
+  vse8.v v16, (t5)
+  add t5, t5, a1
+  vse8.v v17, (t5)
+  add t5, t5, a1
+  vse8.v v18, (t5)
+  add t5, t5, a1
+  vse8.v v19, (t5)
+  add t5, t5, a1
+  vse8.v v20, (t5)
+  add t5, t5, a1
+  vse8.v v21, (t5)
+  add t5, t5, a1
+  vse8.v v22, (t5)
+  add t5, t5, a1
+  vse8.v v23, (t5)
+
+  jr a7
+endfunc
+
+// wide driver: reached only for VLEN >= 256 (the def_fn_16x16 entries
+// branch on vlenb and wire up per-driver helper pointers).
+function inv_txfm_add_16x16_wide_rvv, export=1, ext=v
+  csrw vxrm, zero
+  vsetivli zero, 16, e16, m1, ta, ma
+  addi sp, sp, -16*32
+  mv t4, a2
+  mv t5, sp
+  li t6, 16*2
+  mv t3, a7
+  jalr a7, a6
+  mv t4, sp
+  mv t5, a0
+  li t6, 16*2
+  jal a7, inv_txfm_add_vert_16_rvv
+  addi sp, sp, 16*32
+  ret
+endfunc
+"""
+anchor = ".macro def_fn_16x16 txfm1, txfm2, eob_half"
+assert text.count(anchor) == 1
+text = text.replace(anchor, NEW + "\n" + anchor)
+
+f.write_text(text)
+diff = subprocess.run(["git", "diff", "--", "src/riscv/64/itx.S"], cwd=tree,
+                      capture_output=True, text=True).stdout
+Path(tree).with_name("c4-itx16-wide.diff").write_text(diff)
+print("patched; diff bytes:", len(diff))

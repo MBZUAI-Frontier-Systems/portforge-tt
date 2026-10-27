@@ -30,6 +30,12 @@
       "revision": "a56ce8154c6992648348517489ff5db3d8267798",
       "license": "see upstream",
       "role": "SALTyRN's optimizer; backend/saturn and backend/xnnpack hold its FireSim timing harnesses (reference only)"
+    },
+    "dav1d": {
+      "url": "https://code.videolan.org/videolan/dav1d",
+      "revision": "d7a83f6e0f9360188a38ceae0883f3d132d87b47",
+      "license": "BSD-2-Clause",
+      "role": "AV1 decoder: per-ISA hand-written asm kernels + C reference; checkasm is the correctness/benchmark harness (first non-XNNPACK target)"
     }
   },
   "image": {

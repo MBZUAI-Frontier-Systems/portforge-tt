@@ -1,0 +1,2 @@
+vlen=128 seed=7: vlen=512 seed=1: OK: 14976 cases, 0 failures (seed 1)
+OK: 14976 cases, 0 failures (seed 7)

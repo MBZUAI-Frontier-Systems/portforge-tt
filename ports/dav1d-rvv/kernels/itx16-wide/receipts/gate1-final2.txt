@@ -1,0 +1,7 @@
+qemu:128 seed1: checkasm: all 916 tests passed
+qemu:256 seed1: checkasm: all 916 tests passed
+qemu:512 seed1: checkasm: all 916 tests passed
+qemu:1024 seed1: checkasm: all 916 tests passed
+qemu:512 seed2: checkasm: all 916 tests passed
+qemu:512 seed42: checkasm: all 916 tests passed
+x280 seed1: checkasm: all 916 tests passed
