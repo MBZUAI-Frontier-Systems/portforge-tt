@@ -25,8 +25,12 @@ rule cost hours to days when it was broken.
 
 5. **Never reset cards.** A timeout quarantines a card; only the controller's
    preflight recovery re-admits it. Report and continue other work.
-6. **No repeat without a new hypothesis.** Rerunning an unchanged job to "see if
-   it works now" wastes device hours. For hangs, write a small timed reproducer.
+6. **No unchanged reruns; rejections are context-bound.** Rerunning an unchanged
+   job to "see if it works now" wastes device hours; for hangs, write a small
+   timed reproducer. But a technique rejected on one source is not rejected
+   everywhere: retrying it on a different parent or in combination (fused norm
+   + FP32 accumulation, BFP8 + lower fidelity + L1 residency) is a new
+   hypothesis. Name the parent and the combination in TRANSFORMS.json.
 7. **Check the reference before trusting a failing probe.** A Chronos-2 worker
    spent seven probe generations on "GEMM poisoning" that was really its own
    test comparing `x @ W` on the host with a device holding `W.T`. When a
@@ -44,8 +48,10 @@ rule cost hours to days when it was broken.
 11. **Historical is not current.** A pass for an older source, cluster or suite
     is context, never a current gate. Adding any non-Markdown file changes the
     source identity, so gates must be rerun on the final source before submit.
-12. **Record what did not work.** Rejected hypotheses, with measurements, were
-    as valuable to reviewers as the wins.
+12. **Record what did not work, with its context.** Rejected hypotheses, with
+    measurements, were as valuable to reviewers as the wins. Record the parent
+    source, the combination and the reason (too slow by how much on `perf`, or
+    which gate failed by what margin) so the search can revisit it elsewhere.
 13. **Gates match the task and are never widened.** Token-exact decoding,
     float NRMSE and task metrics (WER, chrF, weighted quantile loss) all appear
     in earlier packs. If a decision flips, measure its margin: a near-tie in
@@ -67,7 +73,7 @@ rule cost hours to days when it was broken.
     with measured evidence). A late layout change invalidated benchmark
     provenance once.
 
-18. **Use the host repo's device fixture in upstream tests.** Tests that open a
+19. **Use the host repo's device fixture in upstream tests.** Tests that open a
     TT device with ttnn.open_device(device_id=0) cannot take device_params from
     CI. When contributing tests to an upstream repo, use its device pytest
     fixture instead (the conftest at the repo root provides it). For portforge-tt

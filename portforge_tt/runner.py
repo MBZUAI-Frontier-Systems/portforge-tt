@@ -22,9 +22,11 @@ import sys
 import time
 
 if __package__:  # installed as part of the portforge_tt package
-    from .models import model_spec
+    from .portforge_models import model_spec
+    from . import opprofile, telemetry
 else:  # flat: runs as harness/runner.py on the TT host
-    from models import model_spec
+    from portforge_models import model_spec
+    import opprofile, telemetry
 
 METAL = PYTHON = HEALTH = LEASES = None
 MOUNTS, CARD_ALLOWLIST = (), ()
@@ -32,6 +34,13 @@ WEIGHTS_BY_MODEL = {}
 HOST_MEMORY_LIMIT_BYTES = 64 * 1024**3
 FULL_TIMEOUT_SECONDS = 21600
 PCI_PATTERN = r'[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]'
+STAGES = ('smoke', 'bringup', 'perf', 'full')
+PRECISIONS = ('bf16', 'fp32', 'fp16', 'bfp8_b')
+# Non-gate evaluator facts forwarded into result.json (the controller never fetches the file).
+PROFILE_ENV = {'TT_METAL_DEVICE_PROFILER': '1', 'TT_METAL_PROFILER_DIR': '/output/profiler',
+               'PORTFORGE_PROFILE': '1'}
+FORWARDED_MEASUREMENTS = ('load_seconds', 'resident_dram_bytes', 'trace_reserved_bytes', 'host_peak_rss_bytes',
+                          'observed_tt_calls', 'memory_scope', 'device_options', 'peak_dram_bytes', 'peak_l1_bytes')
 
 
 def full_job_timeout(config):
@@ -73,6 +82,9 @@ def configure(config):
     HOST_MEMORY_LIMIT_BYTES = memory_limit
     FULL_TIMEOUT_SECONDS = full_timeout
     METAL, PYTHON, HEALTH, LEASES = paths
+    if METAL.is_dir():
+        # bwrap cannot create the tmpfs mount point inside the read-only checkout; a fresh one lacks it.
+        (METAL / 'generated').mkdir(exist_ok=True)
     WEIGHTS_BY_MODEL = weights
     MOUNTS, CARD_ALLOWLIST = mounts, tuple(allowlist)
 
@@ -165,7 +177,7 @@ def checkpoint(model):
     return path, '/weights' if path.is_dir() else '/weights/' + path.name
 
 
-def sandbox(root, job, pci, node, model):
+def sandbox(root, job, pci, node, model, extra_env=None):
     weights, target = checkpoint(model)
     args = ['bwrap', '--die-with-parent', '--new-session', '--unshare-all', '--clearenv']
     for path in ('/usr', '/bin', '/lib', '/lib64', '/sys', '/etc/ld.so.cache', '/etc/hosts'):
@@ -176,7 +188,7 @@ def sandbox(root, job, pci, node, model):
              '--bind', str(job / 'output'), '/output', '--ro-bind', str(job / 'input'), '/input',
              '--ro-bind', str(root / 'harness/evaluate.py'), '/evaluate.py',
              '--ro-bind', str(root / 'harness/portforge_eval.py'), '/portforge_eval.py',
-             '--ro-bind', str(root / 'harness/models.py'), '/models.py',
+             '--ro-bind', str(root / 'harness/portforge_models.py'), '/portforge_models.py',
              '--ro-bind', str(root / 'harness/models.json'), '/models.json',
              '--dev-bind', '/dev/tenstorrent/' + node, '/dev/tenstorrent/' + node]
     if weights.is_dir():
@@ -196,9 +208,11 @@ def sandbox(root, job, pci, node, model):
     for path in ('/dev/hugepages', '/dev/hugepages-1G'):
         if Path(path).exists():
             args += ['--bind' if path.startswith('/dev') else '--ro-bind', path, path]
-    env = {'PATH': str(PYTHON.parent) + ':/usr/bin:/bin', 'HOME': '/work', 'PYTHONPATH': '/work:' + str(METAL),
+    # No /etc/passwd in the sandbox: getpass.getuser() (torch._dynamo imports it) needs LOGNAME/USER.
+    env = {'PATH': str(PYTHON.parent) + ':/usr/bin:/bin', 'HOME': '/work', 'USER': 'portforge', 'LOGNAME': 'portforge',
+           'PYTHONPATH': '/work:' + str(METAL),
            'TT_METAL_HOME': str(METAL), 'TT_METAL_CACHE': '/work/.cache', 'TT_VISIBLE_DEVICES': pci,
-           'PYTHONNOUSERSITE': '1', 'OMP_NUM_THREADS': '12', 'HF_HUB_OFFLINE': '1'}
+           'PYTHONNOUSERSITE': '1', 'OMP_NUM_THREADS': '12', 'HF_HUB_OFFLINE': '1', **(extra_env or {})}
     for key, value in env.items():
         args += ['--setenv', key, value]
     return args + ['--chdir', '/work']
@@ -282,7 +296,8 @@ def failure_kind(code, text, timeout=False, host_memory_limit=False):
     # exception must not turn successful initialization logs into a device fault.
     trace = 'Traceback (most recent call last):'
     failure = text.rsplit(trace, 1)[-1].lower() if trace in text else text.lower()
-    device_fault = (('open_device' in failure and trace in text)
+    # Bad DEVICE_OPTIONS keywords are the candidate's error; they must not quarantine the card.
+    device_fault = (('open_device' in failure and trace in text and 'incompatible function arguments' not in failure)
                     or '0xffffffff' in failure
                     or re.search(r'physical core[^\n]*(?:fail|error|timeout|timed out|not found)', failure)
                     or re.search(r'firmware[^\n]*(?:fail|error|mismatch)|(?:fail|error)[^\n]*firmware', failure))
@@ -365,12 +380,14 @@ def main(root, request):
         target = safe_file(job / 'work', name)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content)
+    if request['kind'] == 'profile' and request.get('stage') not in ('smoke', 'bringup'):
+        raise ValueError('profile uses smoke or bringup inputs')
     public_stage = request.get('public_input_stage', '')
     if public_stage and (request['kind'] != 'run' or public_stage not in ('smoke', 'bringup')):
         raise ValueError('public_input_stage requires run and smoke/bringup')
-    input_stage = request.get('stage') if request['kind'] == 'evaluate' else public_stage
+    input_stage = request.get('stage') if request['kind'] in ('evaluate', 'profile') else public_stage
     if input_stage:
-        if input_stage not in ('smoke', 'bringup', 'full'):
+        if input_stage not in STAGES:
             raise ValueError('invalid stage')
         reference = root / 'references' / model / input_stage / 'input'
         if (reference / 'suite.json').exists():
@@ -385,14 +402,25 @@ def main(root, request):
             (job / 'input' / path.name).write_bytes(path.read_bytes())
     if request['kind'] == 'evaluate':
         stage = request['stage']
-        if stage not in ('smoke', 'bringup', 'full'):
+        if stage not in STAGES:
             raise ValueError('invalid stage')
         precision = request.get('precision', 'bf16')
-        if precision not in ('bf16', 'fp32', 'fp16', 'bfp8_b'):
+        if precision not in PRECISIONS:
             raise ValueError('invalid candidate precision')
         command = [str(PYTHON), '/evaluate.py', 'candidate', '--input', '/input', '--output', '/output',
                    '--weights', weight_target, '--precision', precision]
-        total = {'smoke': 900, 'bringup': 1200, 'full': FULL_TIMEOUT_SECONDS}[stage]
+        total = {'smoke': 900, 'bringup': 1200, 'perf': 3600, 'full': FULL_TIMEOUT_SECONDS}[stage]
+    elif request['kind'] == 'profile':
+        # One device-profiled candidate pass over public smoke/bringup inputs; no oracle, no gate.
+        if request.get('stage') not in ('smoke', 'bringup'):
+            raise ValueError('profile uses smoke or bringup inputs')
+        precision = request.get('precision', 'bf16')
+        if precision not in PRECISIONS:
+            raise ValueError('invalid candidate precision')
+        # --no-web-server: otherwise tracy leaves a WASM UI daemon listening after the capture.
+        command = [str(PYTHON), '-m', 'tracy', '-r', '-p', '--no-web-server', '/evaluate.py', 'candidate', '--input', '/input',
+                   '--output', '/output', '--weights', weight_target, '--precision', precision]
+        total = 1800
     elif request['kind'] == 'preflight':
         command = [str(PYTHON), '-c', "import os,torch,ttnn; "
             f"assert not os.path.exists({str(Path.home() / '.ssh')!r}); "
@@ -401,7 +429,7 @@ def main(root, request):
             "x=ttnn.from_torch(torch.ones(1,1,32,32),device=d,layout=ttnn.TILE_LAYOUT); "
             "assert torch.equal(ttnn.to_torch(ttnn.add(x,x)),torch.full((1,1,32,32),2.)); "
             "ttnn.close_device(d); print('ISOLATION_DEVICE_OK')"]
-        total = 120
+        total = 300  # cold JIT cache: opening a card and compiling one kernel took ~100 s
     else:
         command = ['/bin/bash', '--noprofile', '--norc', '-c', request['command']]
         total = min(max(int(request.get('timeout', 120)), 1), 300)
@@ -429,13 +457,41 @@ def main(root, request):
             time.sleep(1)
     try:
         write_json(job / 'identity.json', {'pci': pci, 'model': model, 'started': time.time()})
-        result = execute(['timeout', '--kill-after=10s', str(total)] + sandbox(root, job, pci, node, model) + command,
-                         job, total + 2, request['kind'] == 'evaluate', request.get('stage', 'smoke'))
+        sensor = telemetry.hwmon_for_pci(pci) if request['kind'] == 'evaluate' else None
+        idle = telemetry.idle_watts(sensor) if sensor else None
+        sampler = telemetry.PowerSampler(sensor).start() if sensor else None
+        try:
+            extra = PROFILE_ENV if request['kind'] == 'profile' else None
+            result = execute(['timeout', '--kill-after=10s', str(total)] + sandbox(root, job, pci, node, model, extra)
+                             + command, job, total + 2, request['kind'] in ('evaluate', 'profile'),
+                             request.get('stage', 'smoke'))
+        finally:
+            samples = sampler.stop() if sampler else None
+        measured = {}
+        if request['kind'] == 'evaluate':
+            try:
+                measured = json.loads((job / 'output/measurements.json').read_text())
+                result['measurements'] = {k: measured[k] for k in FORWARDED_MEASUREMENTS if k in measured}
+            except (OSError, ValueError):
+                measured = {}
+        if request['kind'] == 'profile' and result['returncode'] == 0:
+            try:
+                result['profile'] = opprofile.summarize_file(job / 'output/profiler', 'portforge_timed_start',
+                                                           'portforge_timed_stop')
+            except (OSError, ValueError, StopIteration) as exc:
+                result['profile'] = {'error': str(exc)[-500:]}
+        if samples is not None:
+            telemetry.write_trace(job / 'power.json', samples)
+            result['energy'] = telemetry.energy_report(samples, measured, idle)
         result.update(pci=pci, model=model, job=job.name,
                       stdout=(job / 'stdout.log').read_text(errors='replace')[-12000:],
                       stderr=(job / 'stderr.log').read_text(errors='replace')[-12000:])
         result['failure'] = failure_kind(result['returncode'], result['stdout'] + result['stderr'], result['timeout'],
                                          result.get('host_memory_limit', False))
+        if (request['kind'] == 'profile' and result['failure'] == 'candidate_error'
+                and (result.get('progress') or {}).get('phase') == 'complete'):
+            # The candidate finished; Tracy's post-processing failed (e.g. dropped device markers).
+            result['failure'] = 'profiler_error'
         hashing_timeout = result['failure'] == 'timeout' and (result.get('progress') or {}).get('phase') == 'verify_checkpoint'
         if not hashing_timeout and (result['failure'] in ('timeout', 'device_initialization', 'host_memory_limit')
                                     or (request['kind'] == 'preflight' and result['returncode'])):

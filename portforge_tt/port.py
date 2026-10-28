@@ -3,7 +3,7 @@
 A pack is a directory (see ports/template/) with:
 
   port.json     manifest validated here
-  models.json   pinned checkpoint registry read by models.py
+  models.json   pinned checkpoint registry read by portforge_models.py
   evaluate.py   trusted evaluator: make_suite, reference, candidate, assess
   CONTRACT.md   interface and acceptance envelope the agents must meet
   TASK.md       ordered engineering plan for the worker
@@ -21,7 +21,7 @@ import shutil
 
 PACK_FILES = ("port.json", "models.json", "evaluate.py", "CONTRACT.md", "TASK.md")
 OPTIONAL_DOCS = ("BENCHMARK.md", "SOURCES.md")
-GUIDES = ("TT_GUIDE.md", "LESSONS.md")
+GUIDES = ("TT_GUIDE.md", "LESSONS.md", "TT_OPTIMIZATIONS.md", "CORRECTNESS_PITFALLS.md")
 TT_PRECISIONS = ("bf16", "fp32", "fp16", "bfp8_b")
 
 DEFAULT_OBJECTIVE = (
@@ -59,6 +59,8 @@ def load_port(directory):
     if key not in registry or key not in delivery or any(name not in registry for name in delivery):
         raise ValueError("port.json key must be listed in delivery_models, and every delivery model must be a models.json key")
     precisions = _strings(manifest.get("precisions", list(TT_PRECISIONS)), "precisions")
+    if not isinstance(manifest.get("optimization", {}), dict):
+        raise ValueError("port.json optimization must be an object (see objective.py)")
     delivery_precisions = _strings(manifest.get("delivery_precisions", ["bf16"]), "delivery_precisions")
     if any(p not in TT_PRECISIONS for p in precisions) or any(p not in precisions for p in delivery_precisions):
         raise ValueError("precisions must be TT formats and include every delivery precision")
@@ -79,6 +81,8 @@ def load_port(directory):
         "objective": manifest.get("objective") or DEFAULT_OBJECTIVE.format(title=title),
         "precision_policy": manifest.get("precision_policy") or DEFAULT_PRECISION_POLICY,
         "docs": [name for name in PACK_FILES + OPTIONAL_DOCS if name.endswith(".md") and (root / name).is_file()],
+        "optimization": manifest.get("optimization") or {},
+        "mergeability_gate": manifest.get("mergeability_gate", False) is True,
         "reference_packages": list(reference.get("packages", [])),
         "reference_imports": list(reference.get("imports", [])),
     }

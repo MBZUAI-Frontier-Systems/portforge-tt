@@ -46,10 +46,10 @@ class PortPackTests(unittest.TestCase):
         # fresh interpreter per pack.
         script = (
             "import json, sys; sys.path[:0] = [sys.argv[1], sys.argv[2]]\n"
-            "import models; models.use_registry(sys.argv[1] + '/models.json')\n"
+            "import portforge_models; portforge_models.use_registry(sys.argv[1] + '/models.json')\n"
             "import evaluate, portforge_eval\n"
             "corpus = json.load(open(sys.argv[3]))\n"
-            "for stage in ('smoke', 'bringup', 'full'):\n"
+            "for stage in ('smoke', 'bringup', 'perf', 'full'):\n"
             "    spec, _ = evaluate.make_suite(corpus, stage)\n"
             "    portforge_eval.check_suite(spec)\n"
             "    print(stage, len(spec['cases']))\n")
@@ -61,7 +61,7 @@ class PortPackTests(unittest.TestCase):
                 done = subprocess.run([sys.executable, "-c", script, str(pack), str(HARNESS), str(loaded["corpus_path"])],
                                       capture_output=True, text=True)
                 self.assertEqual(done.returncode, 0, done.stderr)
-                self.assertEqual([line.split()[0] for line in done.stdout.split("\n") if line], ["smoke", "bringup", "full"])
+                self.assertEqual([line.split()[0] for line in done.stdout.split("\n") if line], ["smoke", "bringup", "perf", "full"])
     def test_check_suite_rejects_consistency_cases_without_a_target(self):
         from portforge_eval import check_suite
         spec = {"stage": "full", "cases": [{"name": "batch4", "clips": ["a", "b"]},
@@ -79,7 +79,7 @@ class PortPackTests(unittest.TestCase):
         for node in ast.walk(ast.parse(source)):
             if isinstance(node, ast.Tuple) and all(isinstance(e, ast.Constant) for e in node.elts):
                 names = {e.value for e in node.elts}
-                if "evaluate.py" in names and "models.py" in names:
+                if "evaluate.py" in names and "portforge_models.py" in names:
                     self.assertIn("portforge_eval.py", names, ast.get_source_segment(source, node))
         self.assertIn("'/portforge_eval.py'", (HARNESS / "runner.py").read_text())
 

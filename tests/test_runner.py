@@ -97,7 +97,7 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(args[index - 1], '--ro-bind')
             self.assertNotIn('/models/parakeet', args)
             self.assertIn('/models/parakeet/model.safetensors', args)
-            self.assertIn('/models.py', args)
+            self.assertIn('/portforge_models.py', args)
             self.assertIn('/models.json', args)
 
     def test_sandbox_hides_worktree_git_pointer_as_a_file(self):
@@ -283,6 +283,66 @@ class RunnerTests(unittest.TestCase):
                 self.assertEqual(result['failure'], 'timeout')
                 mark.assert_not_called()
 
+    def test_evaluate_forwards_measurements_and_energy_profile_runs_tracy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'harness').mkdir()
+            (root / 'harness/runtime.json').write_text(json.dumps(self.config(root)))
+            for stage in ('perf', 'smoke'):
+                (root / 'references/parakeet' / stage / 'input').mkdir(parents=True)
+            sensor = root / 'sensor'
+            sensor.mkdir()
+            (sensor / 'power1_input').write_text('120000000')
+            seen = {}
+            def execute(args, job, *unused):
+                seen[job.name] = args
+                for filename in ('stdout.log', 'stderr.log'):
+                    (job / filename).write_text('')
+                now = time.time()
+                (job / 'output/measurements.json').write_text(json.dumps({
+                    'load_seconds': 2.5, 'resident_dram_bytes': 1024, 'secret_oracle': 'never forwarded',
+                    'cases': [{'name': 'a', 'window': [now - 30, now], 'items': 2, 'seconds': [.1] * 300}]}))
+                profiler = job / 'output/profiler/reports'
+                profiler.mkdir(parents=True, exist_ok=True)
+                (profiler / 'ops_perf_results_1.csv').write_text(
+                    'OP CODE,OP TYPE,HOST START TS,DEVICE KERNEL DURATION [ns],OP TO OP LATENCY [ns]\n'
+                    'portforge_timed_start,signpost,1,,\nMatmul,tt_dnn_device,2,5000,100\n'
+                    'portforge_timed_stop,signpost,3,,\n')
+                return {'returncode': 0, 'timeout': False}
+            samples = [(time.time() - 40 + i, 120.0) for i in range(41)]
+            with patch.object(runner, 'cards', return_value={'0000:02:00.0': '7'}), \
+                 patch.object(runner, 'health', return_value={'state': 'healthy'}), \
+                 patch.object(runner, 'mark'), patch.object(runner, 'execute', side_effect=execute), \
+                 patch.object(runner.telemetry, 'hwmon_for_pci', return_value=sensor), \
+                 patch.object(runner.telemetry, 'idle_watts', return_value=30.0), \
+                 patch.object(runner.telemetry.PowerSampler, 'stop', return_value=samples):
+                result = runner.main(root, {'kind': 'evaluate', 'stage': 'perf', 'job': 'perf', 'model': 'parakeet',
+                                            'precision': 'bfp8_b'})
+                profiled = runner.main(root, {'kind': 'profile', 'stage': 'smoke', 'job': 'prof', 'model': 'parakeet'})
+            self.assertEqual(result['measurements'], {'load_seconds': 2.5, 'resident_dram_bytes': 1024})
+            energy = result['energy']
+            self.assertEqual(energy['idle_watts'], 30.0)
+            self.assertAlmostEqual(energy['cases'][0]['mean_watts'], 120.0)
+            self.assertFalse(energy['cases'][0]['short_window'])
+            self.assertTrue((root / 'jobs/perf/power.json').exists())
+            self.assertIn('/evaluate.py', seen['prof'])
+            self.assertEqual(seen['prof'][seen['prof'].index('-m') + 1], 'tracy')
+            self.assertIn('TT_METAL_PROFILER_DIR', seen['prof'])
+            self.assertEqual(profiled['profile']['ops'], 1)
+            self.assertNotIn('energy', profiled)
+            with self.assertRaises(ValueError):
+                runner.main(root, {'kind': 'profile', 'stage': 'full', 'job': 'bad', 'model': 'parakeet'})
+
+            def report_fails(args, job, *unused):  # the candidate completed; Tracy's report did not
+                (job / 'stdout.log').write_text('')
+                (job / 'stderr.log').write_text('Traceback (most recent call last):\nAssertionError: Device data missing')
+                return {'returncode': 1, 'timeout': False, 'progress': {'phase': 'complete'}}
+            with patch.object(runner, 'cards', return_value={'0000:02:00.0': '7'}), \
+                 patch.object(runner, 'health', return_value={'state': 'healthy'}), \
+                 patch.object(runner, 'mark'), patch.object(runner, 'execute', side_effect=report_fails):
+                failed = runner.main(root, {'kind': 'profile', 'stage': 'smoke', 'job': 'prof2', 'model': 'parakeet'})
+            self.assertEqual(failed['failure'], 'profiler_error')
+
     def test_full_generation_uses_trusted_stage_budget_not_candidate_deadline(self):
         self.assertEqual(self.run_phase('generate', 'smoke')['seconds'], 181)
         self.assertEqual(self.run_phase('generate', 'full')['seconds'], 301)
@@ -304,6 +364,9 @@ class RunnerTests(unittest.TestCase):
             text = startup + 'Traceback (most recent call last):\n  backend.create_backend()\n' + exception
             self.assertEqual(runner.failure_kind(1, text), 'candidate_error')
         self.assertEqual(runner.failure_kind(1, startup + 'ValueError: invalid shape'), 'candidate_error')
+        bad_options = ('Traceback (most recent call last):\n    device = ttnn.open_device(device_id=0, **options)\n'
+                       'TypeError: open_device(): incompatible function arguments.')
+        self.assertEqual(runner.failure_kind(1, bad_options), 'candidate_error')
 
     def test_real_device_faults_and_timeouts_still_require_recovery(self):
         for text in ('Traceback (most recent call last):\n  ttnn.open_device()\nRuntimeError: initialization failed',

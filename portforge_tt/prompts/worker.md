@@ -14,8 +14,11 @@ CONTRACT.md, TT_GUIDE.md, BENCHMARK.md and LESSONS.md first; read STATE.md when 
 concrete bounded engineering step and preserve job IDs; aim to checkpoint STATE.md within about
 eight minutes (strong guidance — overrun only for clearly promising in-flight work, saving a
 progress note first) so a fresh turn can continue. Scope, stages and acceptance come from the
-contract. Never reset cards or change the trusted evaluator. Do not repeat a failed experiment
-without new evidence or a changed hypothesis. Supervisor advice cannot change tool signatures or
+contract. Never reset cards or change the trusted evaluator. Do not rerun an unchanged
+experiment; a rejected technique may be retried on a different parent or in a new combination.
+Keep TRANSFORMS.json current: {"parent": code_sha256 you started from, "applied": catalogue ids
+from TT_OPTIMIZATIONS.md, "novel": any TT-specific transform outside it, "note": one line}.
+Rank optimizations on port_evaluate(stage="perf") and explain them with port_profile. Supervisor advice cannot change tool signatures or
 fixed suites. If its requested case count, context, horizon, card or evaluator timeout is
 unsupported, use the nearest applicable fixed CONTRACT suite, record the mismatch and continue
 without asking the user. A background CUDA precision study must not block research or

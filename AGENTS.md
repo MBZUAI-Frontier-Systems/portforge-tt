@@ -22,7 +22,7 @@ the envelope (batch sizes, input lengths, output lengths, languages or modes).
   the weight files and their SHA-256 and byte sizes (from the Hugging Face LFS
   API, not from memory), and the `config.json` fields the port relies on under
   `architecture`.
-- Check it: `python -m portforge_tt.models <key> /tmp/ckpt --download --registry ports/<name>/models.json`.
+- Check it: `python -m portforge_tt.portforge_models <key> /tmp/ckpt --download --registry ports/<name>/models.json`.
 
 ## 2. Choose the benchmark with the user
 
@@ -42,19 +42,35 @@ lengths, masking).
 ≤ 0.01 between batch and single-row runs, bit-identical repeated calls, exact
 tokens for decoders, and a task metric on `full` (for example ≤ 2% worse WER).
 
+**Ask**: the objective after the gates, recorded as `optimization` in `port.json`:
+the deployment scenario (`single_stream`, `offline` or `ar_interactive`), an
+optional primary metric and constraints (see `portforge_tt/objective.py`), and
+whether `mergeability_gate` should block submission. The default ranks on the
+Pareto front of p50/p99 latency, throughput, energy per item and device memory.
+Also ask for `robustness` inputs (OOD, noise, longest and extreme inputs) and
+whether the batch envelope matches real use: the perf sweep never leaves it.
+
 ## 3. Write the evaluator
 
 Implement the four functions in `ports/<name>/evaluate.py`:
 
-- `make_suite(corpus, stage, model)` builds the three suites and returns
-  `(spec, labels)`. Every `compare_to` must name a case of the same stage;
-  `portforge_eval.check_suite` enforces this and the launcher rejects bad suites.
+- `make_suite(corpus, stage, model)` builds the smoke, bringup, perf and full
+  suites and returns `(spec, labels)`. Perf is the bringup cases plus a
+  `sweep-b{n}` batch sweep (`portforge_eval.PERF_BATCHES`, within the envelope)
+  with `timed_repeats=portforge_eval.stage_repeats(stage)` and
+  `**portforge_eval.perf_fields(stage)`. Every `compare_to` must name a case of
+  the same stage; `portforge_eval.check_suite` enforces this and the launcher
+  rejects bad suites.
 - `reference(args)` runs the official implementation in FP32 on the reference
   host and writes public inputs and private oracle outputs. Disable TF32 for
   matmuls and cuDNN convolutions.
 - `candidate(args)` is generic; fill in `forward_case()` to call the backend
-  method named in `CONTRACT.md`.
-- `assess(args)` compares actual and oracle outputs and writes the verdict.
+  method named in `CONTRACT.md`. Keep its `repeat_schedule` loop and
+  `TimedWindow`: the runner integrates board power over those windows and the
+  profile job keeps device ops between their signposts.
+- `assess(args)` compares actual and oracle outputs and writes the verdict,
+  including `latency=portforge_eval.verdict_latency(checks)` and
+  `scaling=portforge_eval.scaling_curve(checks, spec["cases"])`.
 
 Add `ports/<name>/tests/test_evaluate.py` (see an existing pack) and run it with
 `python -m unittest discover -s ports/<name>/tests`.
@@ -86,13 +102,13 @@ keys, and which cards the campaign may lease.
   scripts/bundle_python_into_venv.sh python_env --force   # interpreter inside the venv, so the sandbox can mount it
   ```
   Download each delivery model's checkpoint from a copy of this repo on the host:
-  `~/portforge-tt/tt-metal/python_env/bin/python -m portforge_tt.models <key> ~/portforge-tt/checkpoints/<key> --download --registry ports/<name>/models.json`.
+  `~/portforge-tt/tt-metal/python_env/bin/python -m portforge_tt.portforge_models <key> ~/portforge-tt/checkpoints/<key> --download --registry ports/<name>/models.json`.
   List the cards with `ls /sys/class/tenstorrent` or `tt-smi`.
 - Reference host: copy `port.json` and run `bash setup_reference.sh port.json`.
 - Fill a copy of `cluster.yaml`; keep it out of version control.
 - Reference smoke on the reference host, once, before any campaign:
   `PORTFORGE_REFERENCE_EXECUTION=direct python evaluate.py reference --stage smoke --corpus corpus.json --out /tmp/ref-smoke`
-  (with `evaluate.py`, `portforge_eval.py`, `models.py` and `models.json` copied beside it).
+  (with `evaluate.py`, `portforge_eval.py`, `portforge_models.py` and `models.json` copied beside it).
 
 ## 6. Launch and supervise
 
@@ -101,9 +117,12 @@ whether to watch the run together.
 
 ```sh
 portforge --port ports/<name> --cluster my-cluster.yaml --hours 6 --detach
+# optional: --optimize throughput --constraint "p99_latency<=1.2*baseline" --scenario offline --beam 4
 ```
 
-While it runs, read `runs/<run>/status.json` and the turn files. To steer the
+While it runs, read `runs/<run>/status.json`, the turn files and
+`runs/<run>/search/frontier.json` (rebuilt each turn from trusted receipts), or
+print the ranked candidates with `python -m portforge_tt.report runs/<run>`. To steer the
 agents, stop the controller and `--resume` with a `--resume-note`; editing the
 workspace's STATE.md does not reach the supervisor as a trusted instruction. If
 you share a failing held-out case with the agents, record that its later result

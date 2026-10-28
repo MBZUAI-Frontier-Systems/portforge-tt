@@ -82,22 +82,24 @@ if __package__:  # installed package or python -m portforge_tt.portforge_loop
     from .mcpserver import ToolServer
     from .agents import worker_node, supervisor_node, repository_root, BACKENDS, DEFAULT_MODELS
     from .runner import safe_file, write_json, validate_log_request, full_job_timeout
-    from .models import model_spec, use_registry
+    from .portforge_models import model_spec, use_registry
     from .port import GUIDES, freeze as freeze_port, load_port, seed_documents
     from .cluster import (activated, identity as digest, load as load_cluster,
                           ssh, upload, remote, reference_job)
     from .portforge_eval import check_suite
+    from . import merge_check, objective, search
 else:  # flat: the frozen copy this run re-executes, or a direct script call
     import runtime, tracer
     from runtime import job, get
     from mcpserver import ToolServer
     from agents import worker_node, supervisor_node, repository_root, BACKENDS, DEFAULT_MODELS
     from runner import safe_file, write_json, validate_log_request, full_job_timeout
-    from models import model_spec, use_registry
+    from portforge_models import model_spec, use_registry
     from port import GUIDES, freeze as freeze_port, load_port, seed_documents
     from cluster import (activated, identity as digest, load as load_cluster,
                          ssh, upload, remote, reference_job)
     from portforge_eval import check_suite
+    import merge_check, objective, search
 
 HERE = Path(__file__).resolve().parent
 # The model-specific half of the campaign. A frozen run harness carries its pack
@@ -113,7 +115,7 @@ def configure_port(directory):
 
 
 # Files an evaluator needs wherever it runs (reference host, TT host, sandbox).
-EVALUATOR_FILES = ('evaluate.py', 'portforge_eval.py', 'models.py', 'models.json')
+EVALUATOR_FILES = ('evaluate.py', 'portforge_eval.py', 'portforge_models.py', 'models.json')
 
 
 def seed_policy():
@@ -154,6 +156,22 @@ def suite_identity(run, model, stage):
                    'evaluator': (Path(run) / 'harness/evaluate.py').read_text()})
 
 
+def campaign_objective(run):
+    """The run's validated objective spec (manifest), or the pack default for older runs."""
+    manifest = Path(run) / 'manifest.json'
+    saved = json.loads(manifest.read_text()).get('optimization') if manifest.is_file() else None
+    if saved:
+        return saved
+    return objective.spec(PORT.get('optimization') if PORT else None)
+
+
+def search_beam(config, run=None):
+    """Beam width: explicit --beam, else one branch per configured TT card."""
+    manifest = Path(run) / 'manifest.json' if run else None
+    beam = json.loads(manifest.read_text()).get('beam') if manifest and manifest.is_file() else None
+    return beam or int(config['tt'].get('resources', {}).get('tt', 1))
+
+
 def passing_evaluation(result, job, signature, model, precision, stage):
     """Require an unambiguous trusted terminal receipt for this exact evaluation."""
     if not isinstance(result, dict):
@@ -169,6 +187,17 @@ def passing_evaluation(result, job, signature, model, precision, stage):
             and verdict.get('stage') == stage and verdict.get('model_key') == model
             and verdict['precision'].get('requested') == precision
             and isinstance(verdict.get('suite_sha256'), str) and bool(verdict['suite_sha256']))
+
+
+def without_raw_samples(result):
+    """Drop per-repeat timing arrays from a receipt shown to agents; the percentiles beside them stay.
+    A perf verdict keeps thousands of samples per case (megabytes), more than a tool reply can carry."""
+    checks = (result.get('verdict') or {}).get('checks') if isinstance(result, dict) else None
+    if not isinstance(checks, list) or not any(isinstance(c, dict) and isinstance(c.get('seconds'), list) for c in checks):
+        return result
+    checks = [dict({k: v for k, v in c.items() if k != 'seconds'}, seconds_omitted=len(c['seconds']))
+              if isinstance(c, dict) and isinstance(c.get('seconds'), list) else c for c in checks]
+    return dict(result, verdict=dict(result['verdict'], checks=checks))
 
 
 def supervisor_facts(workspace, run, config, model=None):
@@ -235,10 +264,15 @@ def supervisor_facts(workspace, run, config, model=None):
     passed.extend({'stage': stage, 'model': name, 'precision': precision}
                   for name, precisions in evidence.items() for precision, stages in precisions.items()
                   for stage, cell in stages.items() if cell['status'] == 'passed')
+    chosen = campaign_objective(run)
+    known = search.catalogue(HERE / 'guides' / 'optimizations.json')
+    nodes = search.build(run, set(known))
+    tree = search.summary(nodes, chosen, known, seed=len(jobs), beam=search_beam(config, run))
     baselines = [json.loads(path.read_text()) for path in (Path(run) / 'baselines').rglob('*.json')]
     baselines = [value for value in baselines if value.get('model') == model
                  and value.get('cluster_sha256') == digest(config)]
     return {'objective': PORT['objective'],
+             'optimization': tree, 'mergeability': merge_check.check(files),
              'selected_model': model, 'baselines': baselines[-12:],
             'delivery_scope': {'models': list(delivery_models), 'development_anchor': model,
                 'artifact': 'One configuration-driven backend plus a tt-metal-style package (tt/, demo/, reference/, tests/, benchmarks/, docs/) and portable tests.',
@@ -272,12 +306,19 @@ def supervisor_facts(workspace, run, config, model=None):
                                   'model': list(delivery_models), 'default_model': model},
                          'log': 'Read own TT job stdout/stderr in byte pages up to 65536; no reference-study logs.',
                          'status': 'Use compact=True for bounded log tails; structured results remain complete.',
-                         'evaluate': {'stage': ['smoke', 'bringup'], 'precision': list(PORT['precisions']),
-                                      'model': list(delivery_models)},
+                         'evaluate': {'stage': ['smoke', 'bringup', 'perf'], 'precision': list(PORT['precisions']),
+                                      'model': list(delivery_models),
+                                      'perf': 'Bringup cases plus a batch sweep, >=100 samples or >=20 s per case: '
+                                              'latency percentiles, throughput curve and board energy. Gated like '
+                                              'bringup; the only stage the frontier ranks on.'},
+                         'profile': {'stage': ['smoke', 'bringup'], 'precision': list(PORT['precisions']),
+                                     'returns': 'device op table between the timed signposts: op time, gap share, '
+                                                'TT performance-model efficiency, FPU/DRAM utilization'},
                          'fixed_suites': suite_sizes(run, model),
                          'unsupported': ['case selection/count', 'context or horizon override', 'card selection',
                                          'evaluation timeout override'],
-                         'full': 'Only submit(precision, model) after current-source bringup passes.'}}
+                         'full': 'Only submit(precision, model) after current-source bringup passes.'
+                                 + (' Submission also requires mergeability.passed.' if PORT['mergeability_gate'] else '')}}
 
 
 def _pack_evaluator():
@@ -307,7 +348,7 @@ def check_suites(corpus, model):
     spec = importlib.util.spec_from_file_location('portforge_pack_evaluate_launch', PORT['dir'] / 'evaluate.py')
     evaluator = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(evaluator)
-    for stage in ('smoke', 'bringup', 'full'):
+    for stage in ('smoke', 'bringup', 'perf', 'full'):
         check_suite(evaluator.make_suite(corpus, stage, model)[0])
 
 
@@ -475,7 +516,7 @@ def prepare(run, config):
     endpoint = config['tt']
     root = endpoint['work_dir'] + '/' + Path(run).name
     upload(endpoint, root + '/harness', {
-        **{name: (Path(run) / 'harness' / name).read_bytes() for name in ('runner.py', 'evaluate.py', 'portforge_eval.py', 'models.py', 'models.json')},
+        **{name: (Path(run) / 'harness' / name).read_bytes() for name in ('runner.py', 'telemetry.py', 'opprofile.py', 'evaluate.py', 'portforge_eval.py', 'portforge_models.py', 'models.json')},
         'runtime.json': json.dumps(endpoint)})
     q = shlex.quote
     commit = ssh(endpoint, 'git -C ' + q(endpoint['metal']) + ' rev-parse HEAD', timeout=120).decode().strip()
@@ -500,7 +541,7 @@ def prepare(run, config):
     for card in found:
         job = 'preflight-' + uuid.uuid4().hex
         result = remote(config, run, {'kind': 'preflight', 'job': job, 'pci': card['pci'],
-                                      'model': next(iter(weights))}, timeout=150)
+                                      'model': next(iter(weights))}, timeout=330)
         write_json(Path(run) / 'preflights' / (job + '.json'), result)
     health = remote(config, run, {'kind': 'health'})
     if not any(c['state'] == 'healthy' for c in health['cards']):
@@ -564,7 +605,7 @@ def recover_timed_out_card(run, config, health, model):
                 json.dump(record, stream, indent=2)
         except FileExistsError:
             continue
-        checked = remote(config, str(run), probe, timeout=170)
+        checked = remote(config, str(run), probe, timeout=330)
         write_json(run / 'preflights' / (probe['job'] + '.json'), checked)
         write_json(receipt, {**record, 'state': 'complete', 'result': checked})
         # The runner owns card state; success is established by its actual probe.
@@ -582,9 +623,9 @@ def validate_reference_archive(path, corpus, stage, model):
     validate_receipt = getattr(evaluator, 'validate_receipt')
     validate_artifact = getattr(evaluator, 'validate_artifact')
     if __package__:
-        from .models import unique_object
+        from .portforge_models import unique_object
     else:
-        from models import unique_object
+        from portforge_models import unique_object
     if stage not in ('smoke', 'bringup'):
         raise ValueError('only completed short reference stages can be imported')
     path = Path(path)
@@ -704,7 +745,7 @@ def reference(run_dir, stage, config, model=None):
     if not (cache / 'reference.tar').exists():
         upload(endpoint, directory, {'evaluate.py': (run / 'harness/evaluate.py').read_bytes(),
                                      'corpus.json': (run / 'corpus.json').read_bytes(),
-                                     **{name: (run / 'harness' / name).read_bytes() for name in ('portforge_eval.py', 'models.py', 'models.json')}})
+                                     **{name: (run / 'harness' / name).read_bytes() for name in ('portforge_eval.py', 'portforge_models.py', 'models.json')}})
         reference_job(endpoint, directory, shlex.join([endpoint['python'], 'evaluate.py', 'reference',
             '--stage', stage, '--model', model, '--corpus', 'corpus.json', '--out', '.']), True, cache / 'job.json')
         data = ssh(endpoint, 'tar -cf - -C ' + q(directory) + ' input oracle', timeout=300)
@@ -737,7 +778,7 @@ def experiment(run_dir, job, request, config):
         transport_timeout = (full_job_timeout(endpoint) + 400
                              if request.get('kind') == 'evaluate' and stage == 'full' else 22000)
         result = remote(config, run_dir, {'job': job, **request}, timeout=transport_timeout)
-        if stage and result['returncode'] == 0:
+        if stage and result['returncode'] == 0 and request.get('kind', 'evaluate') == 'evaluate':
             root = endpoint['work_dir'] + '/' + run.name
             output = root + '/jobs/' + job + '/output'
             if stage != 'full':
@@ -792,7 +833,7 @@ class PortTools(ToolServer):
         self.model = model
         self.workspace, self.run_dir = Path(workspace), Path(run_dir)
         self.refs = {}
-        for name in ('files', 'read', 'write', 'run', 'evaluate', 'status', 'log', 'submit'):
+        for name in ('files', 'read', 'write', 'run', 'evaluate', 'profile', 'status', 'log', 'submit'):
             self.mcp.add_tool(getattr(self, name), name='port_' + name)
 
     def files(self) -> list:
@@ -836,7 +877,9 @@ class PortTools(ToolServer):
             request['suite_definition_sha256'] = suite_identity(self.run_dir, request.get('model', PORT['key']), input_stage)
         for path in (self.run_dir / 'jobs').glob('*/request.json'):
             old = json.loads(path.read_text())
+            # Same kind too: a profile must never be answered with an evaluate receipt.
             if (stage and old.get('stage') == stage and old['code_sha256'] == code_hash(files)
+                    and old.get('kind', 'evaluate') == request.get('kind', 'evaluate')
                     and old.get('suite_definition_sha256') == request.get('suite_definition_sha256')
                     and old.get('model', PORT['key']) == request.get('model', PORT['key'])
                     and old.get('precision') == request.get('precision')
@@ -866,18 +909,34 @@ class PortTools(ToolServer):
                                 'public_input_stage': public_input_stage, 'model': model})
 
     def evaluate(self, stage: str = 'smoke', precision: str = 'bf16', model: str = '') -> dict:
-        """Independent CUDA-reference check: smoke (tiny) or bringup (short behavior suite).
+        """Independent CUDA-reference check: smoke (tiny), bringup (short behavior suite) or perf
+        (bringup cases + batch sweep, many repeats: latency percentiles, throughput, energy).
         Full corpus is reserved for frozen submit(). Call status to collect results.
         """
         model = model or getattr(self, 'model', PORT['key'])
         model_spec(model)
         if precision not in PORT['precisions']:
             raise ValueError('unsupported precision')
-        if stage not in ('smoke', 'bringup'):
-            raise ValueError('use smoke/bringup; full is controller-only after submission')
+        if stage not in ('smoke', 'bringup', 'perf'):
+            raise ValueError('use smoke/bringup/perf; full is controller-only after submission')
         if not (self.workspace / 'backend.py').exists():
             raise ValueError('backend.py required')
         return self._start_job({'kind': 'evaluate', 'stage': stage, 'precision': precision, 'model': model})
+
+    def profile(self, stage: str = 'smoke', precision: str = 'bf16', model: str = '') -> dict:
+        """Device-profile one candidate pass (Tracy) over public smoke/bringup inputs.
+        Returns, via status, a per-op table between the timed signposts: device time, op-to-op
+        gap share, TT performance-model efficiency, FPU/DRAM utilization. No gate, no oracle.
+        """
+        model = model or getattr(self, 'model', PORT['key'])
+        model_spec(model)
+        if precision not in PORT['precisions']:
+            raise ValueError('unsupported precision')
+        if stage not in ('smoke', 'bringup'):
+            raise ValueError('profile uses smoke or bringup inputs')
+        if not (self.workspace / 'backend.py').exists():
+            raise ValueError('backend.py required')
+        return self._start_job({'kind': 'profile', 'stage': stage, 'precision': precision, 'model': model})
 
     def status(self, compact: bool = False, job_id: str = '') -> dict:
         """Collect recent results and every pending job, including older background studies.
@@ -922,7 +981,7 @@ class PortTools(ToolServer):
                                              'precision': request.get('precision'), 'cluster_sha256': request.get('cluster_sha256'),
                                              'model': request.get('model', PORT['key']), 'suite_sha256': result['verdict']['suite_sha256'],
                                              'suite_definition_sha256': request['suite_definition_sha256']})
-                results[path.parent.name] = result
+                results[path.parent.name] = without_raw_samples(result)
             elif job_id:
                 results[path.parent.name] = {'status': 'pending', 'progress': {'phase': 'saved_request_without_result'}}
             else:
@@ -953,7 +1012,7 @@ class PortTools(ToolServer):
                 item['details'] = ({'tool': 'port_log', 'job_id': path.parent.name,
                                     'streams': ['stdout', 'stderr'],
                                     'note': 'Saved result excerpts may already be truncated; log reads original byte pages.'}
-                                   if request.get('kind') in ('run', 'evaluate') else
+                                   if request.get('kind') in ('run', 'evaluate', 'profile') else
                                    {'tool': 'port_status', 'compact': False, 'job_id': path.parent.name,
                                     'note': 'Reference-study details use status; TT log access is unavailable.'})
                 results[path.parent.name] = item
@@ -971,8 +1030,8 @@ class PortTools(ToolServer):
         if any(p.is_symlink() for p in (job.parent, job, path)) or not path.is_file():
             raise ValueError('unknown or unsafe job')
         request = json.loads(path.read_text())
-        if request.get('kind') not in ('run', 'evaluate'):
-            raise ValueError('only own TT run/evaluate job logs are exposed')
+        if request.get('kind') not in ('run', 'evaluate', 'profile'):
+            raise ValueError('only own TT run/evaluate/profile job logs are exposed')
         key = request.get('cluster_sha256', '')
         if not isinstance(key, str) or len(key) != 64 or any(c not in '0123456789abcdef' for c in key):
             raise ValueError('missing archived cluster identity')
@@ -992,6 +1051,10 @@ class PortTools(ToolServer):
         if precision not in PORT['precisions']:
             raise ValueError('unsupported precision')
         files = snapshot(self.workspace)
+        if PORT['mergeability_gate']:
+            readiness = merge_check.check(files)
+            if not readiness['passed']:
+                raise ValueError('package is not upstream-ready: ' + '; '.join(readiness['issues'][:8]))
         config = activated(self.run_dir)
         source, signature = code_hash(files), digest(config)
         definition = suite_identity(self.run_dir, model, 'bringup')
@@ -1055,6 +1118,12 @@ def main():
     parser.add_argument('--agent-model', help='Worker model (default depends on --agent)')
     parser.add_argument('--supervisor-agent', choices=BACKENDS, help='Supervisor agent CLI (default: --agent)')
     parser.add_argument('--supervisor-model', help='Supervisor model (default depends on its agent)')
+    parser.add_argument('--optimize', help='Primary metric to optimize after the gates (default: Pareto front): '
+                        + ', '.join(objective.METRICS))
+    parser.add_argument('--constraint', action='append', default=[],
+                        help='Repeatable, e.g. "p99_latency<=1.1*baseline" or "dram_bytes<=4e9"')
+    parser.add_argument('--scenario', choices=tuple(objective.SCENARIOS), help='Deployment scenario to report')
+    parser.add_argument('--beam', type=int, help='Parallel search width (default: TT cards in the cluster)')
     args = parser.parse_args()
     if args.cluster is None:
         for candidate in (Path.cwd() / 'cluster.yaml', HERE.parent / 'cluster.yaml'):
@@ -1108,6 +1177,14 @@ def main():
                 command += ['--resume', str(args.resume.resolve())]
             if args.resume_note:
                 command += ['--resume-note', args.resume_note]
+            if args.optimize:
+                command += ['--optimize', args.optimize]
+            for constraint in args.constraint:
+                command += ['--constraint', constraint]
+            if args.scenario:
+                command += ['--scenario', args.scenario]
+            if args.beam:
+                command += ['--beam', str(args.beam)]
             command += ['--agent', agents['worker']['backend'], '--agent-model', agents['worker']['model'],
                         '--supervisor-agent', agents['supervisor']['backend'],
                         '--supervisor-model', agents['supervisor']['model']]
@@ -1127,6 +1204,12 @@ def main():
         corpus = json.loads(Path(args.corpus).read_text())
         if digest(corpus) != PORT['corpus_sha256']:
             raise ValueError('corpus identity mismatch')
+        try:
+            optimization = objective.spec(PORT['optimization'], args.optimize, args.constraint, args.scenario)
+        except ValueError as exc:
+            parser.error(str(exc))
+        if args.beam is not None and not 1 <= args.beam <= 64:
+            parser.error('--beam must be in 1..64')
         check_suites(corpus, args.model)
         repository = repository_root()
         if repository == Path('/'):
@@ -1156,6 +1239,7 @@ def main():
                     'agent_backends': {role: agents[role]['backend'] for role in agents},
                     'agent_models': {role: agents[role]['model'] for role in agents},
                     'operator_note': args.resume_note.strip(),
+                    'optimization': optimization, 'beam': args.beam,
                     'reference_run': str(args.reference_run.resolve()) if args.reference_run else None, **provenance}
         write_json(run / 'manifest.json', manifest)
         command = [sys.executable, str(run / 'harness/portforge_loop.py'), '--controller', '--run-dir', str(run),
@@ -1244,6 +1328,11 @@ def main():
             if not any(c['state'] == 'healthy' for c in health['cards']):
                 state('paused_hardware', health=health)
                 break
+            try:
+                known = search.catalogue(HERE / 'guides' / 'optimizations.json')
+                search.write(run, search.build(run, set(known)), campaign_objective(run), known)
+            except (OSError, ValueError) as exc:
+                tracer.event('search.write_failed', error=str(exc)[-500:])
             facts = supervisor_facts(workspace, run, config, args.model)
             state('supervising', turn=turn, health=health, recent_jobs=facts['recent_jobs'])
             review = get(supervisor_node.submit(str(workspace), str(run), turn,

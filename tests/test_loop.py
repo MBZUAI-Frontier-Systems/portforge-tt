@@ -64,6 +64,21 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(saved, {p.name: p.read_bytes() for p in job.iterdir()})
         self.assertFalse((self.tools.run_dir / 'baselines').exists())
 
+    def test_status_omits_raw_timing_samples(self):
+        job = self.tools.run_dir / 'jobs/perf'
+        check = {'name': 'sweep-b4', 'p50_seconds': .002, 'p99_seconds': .003, 'seconds': [.002] * 5000}
+        result = {'returncode': 0, 'verdict': {'passed': True, 'latency': {'max_case_p99_seconds': .003},
+                                               'checks': [check, {'name': 'gate', 'seconds': 1.5}]}}
+        write_json(job / 'request.json', {'kind': 'evaluate', 'stage': 'perf'})
+        write_json(job / 'result.json', result)
+        for shown in (self.tools.status()['perf'], self.tools.status(job_id='perf')['perf']):
+            checks = shown['verdict']['checks']
+            self.assertEqual(checks[0], {'name': 'sweep-b4', 'p50_seconds': .002, 'p99_seconds': .003,
+                                         'seconds_omitted': 5000})
+            self.assertEqual(checks[1], {'name': 'gate', 'seconds': 1.5})
+            self.assertEqual(shown['verdict']['latency'], result['verdict']['latency'])
+        self.assertEqual(json.loads((job / 'result.json').read_text()), result)
+
     def test_status_exact_pending_is_local_and_preserves_request(self):
         request = {'kind': 'reference-study', 'model': 'parakeet', 'cluster_sha256': 'missing'}
         job = self.tools.run_dir / 'jobs/pending'
@@ -221,10 +236,12 @@ class LoopTests(unittest.TestCase):
         write_json(job / 'request.json', request)
         write_json(job / 'result.json', result)
         saved = (job / 'result.json').read_bytes()
-        self.assertEqual(self.tools.status(), {'failure': result})
+        shown = loop.without_raw_samples(result)
+        self.assertEqual(shown['verdict']['checks'], [{'name': 'one', 'rows': 1, 'seconds_omitted': 2}])
+        self.assertEqual(self.tools.status(), {'failure': shown})
         compact = self.tools.status(compact=True)['failure']
         self.assertEqual(compact['request_identity'], request)
-        for key, value in result.items():
+        for key, value in shown.items():
             if key not in ('stdout', 'stderr'):
                 self.assertEqual(compact[key], value)
         for stream in ('stdout', 'stderr'):
@@ -234,7 +251,7 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(compact['details']['tool'], 'port_log')
         self.assertEqual(compact['details']['job_id'], 'failure')
         self.assertEqual((job / 'result.json').read_bytes(), saved)
-        self.assertEqual(self.tools.status(), {'failure': result})
+        self.assertEqual(self.tools.status(), {'failure': shown})
         for invalid in ('false', 1, None):
             with self.subTest(compact=invalid), self.assertRaises(ValueError):
                 self.tools.status(compact=invalid)
@@ -680,6 +697,13 @@ class LoopTests(unittest.TestCase):
                 self.assertEqual(self.tools.evaluate('smoke'), {'job': 'one', 'reused': True})
                 remote.assert_not_called()
 
+    def test_profile_is_never_answered_by_an_evaluate_receipt(self):
+        self.archive('smoke', {'verdict': {'passed': True}})
+        with patch.object(loop.experiment, 'submit') as remote:
+            started = self.tools.profile('smoke')
+        self.assertNotIn('reused', started)
+        remote.assert_called_once()
+
     def test_instruction_protection_handles_equivalent_paths(self):
         for path in ('CONTRACT.md', './CONTRACT.md', './TT_GUIDE.md', './TASK.md'):
             with self.subTest(path=path), self.assertRaises(ValueError):
@@ -795,6 +819,55 @@ class LoopTests(unittest.TestCase):
         (self.tools.workspace / 'backend.py').write_text('# changed')
         self.assertEqual(loop.supervisor_facts(self.tools.workspace, self.tools.run_dir,
                                              self.config)['workspace']['current_source_passes'], [])
+
+    def test_perf_and_profile_jobs_use_the_trusted_job_path(self):
+        with patch.object(loop.experiment, 'submit', return_value=support.future('future')) as remote:
+            perf = self.tools.evaluate('perf')
+            profiled = self.tools.profile('bringup', precision='bfp8_b')
+        requests = [json.loads((self.tools.run_dir / 'jobs' / r['job'] / 'request.json').read_text())
+                    for r in (perf, profiled)]
+        self.assertEqual([(r['kind'], r['stage']) for r in requests], [('evaluate', 'perf'), ('profile', 'bringup')])
+        self.assertEqual(remote.call_count, 2)
+        for bad in (lambda: self.tools.evaluate('full'), lambda: self.tools.profile('perf'),
+                    lambda: self.tools.profile('smoke', precision='int8')):
+            with self.assertRaises(ValueError):
+                bad()
+
+    def test_profile_jobs_never_run_the_oracle_assessment(self):
+        run = self.tools.run_dir
+        endpoint = {'work_dir': '/srv/tt', 'python': '/env/python'}
+        config = {'tt': endpoint, 'reference': {'host': '192.0.2.2'}}
+        reference = {'tt_dir': '/srv/tt/ref', 'reference_dir': '/gpu/ref'}
+        with patch.object(loop, 'cached_reference', return_value=reference), \
+             patch.object(loop, 'remote', return_value={'returncode': 0, 'profile': {'ops': 3}}), \
+             patch.object(loop, 'ssh') as ssh:
+            result = loop.experiment(str(run), 'prof', {'kind': 'profile', 'stage': 'smoke', 'model': 'parakeet'}, config)
+        ssh.assert_not_called()
+        self.assertEqual(result['profile'], {'ops': 3})
+        self.assertNotIn('verdict', result)
+
+    def test_supervisor_facts_carry_objective_search_and_mergeability(self):
+        self.delivery_receipt(job='one', stage='bringup', model='parakeet')
+        facts = loop.supervisor_facts(self.tools.workspace, self.tools.run_dir, self.config)
+        self.assertEqual(facts['controls']['evaluate']['stage'], ['smoke', 'bringup', 'perf'])
+        self.assertIn('profile', facts['controls'])
+        optimization = facts['optimization']
+        self.assertEqual(optimization['objective']['pareto'], list(loop.objective.DEFAULT_PARETO))
+        self.assertEqual(optimization['nodes'], 1)
+        self.assertTrue(optimization['beam'] and optimization['beam'][0]['offered'])
+        self.assertFalse(facts['mergeability']['passed'])
+        write_json(self.tools.run_dir / 'manifest.json', {'optimization': loop.objective.spec(primary='p99_latency'),
+                                                          'beam': 2})
+        facts = loop.supervisor_facts(self.tools.workspace, self.tools.run_dir, self.config)
+        self.assertEqual(facts['optimization']['objective']['primary'], 'p99_latency')
+
+    def test_mergeability_gate_blocks_submission_of_an_unready_package(self):
+        self.delivery_receipt(job='one', model='parakeet')
+        with patch.dict(loop.PORT, {'mergeability_gate': True}):
+            with self.assertRaisesRegex(ValueError, 'not upstream-ready'):
+                self.tools.submit()
+        self.assertFalse((self.tools.run_dir / 'submission.json').exists())
+        self.assertEqual(self.tools.submit()['status'], 'frozen_for_full_evaluation')
 
     def delivery_receipt(self, job='delivery', model='parakeet', precision='bf16', stage='bringup'):
         request = {'kind': 'evaluate', 'model': model, 'precision': precision, 'stage': stage,

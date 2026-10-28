@@ -26,7 +26,9 @@ You need a TT host (built TT-Metal checkout, `ttnn` + `torch`, `bwrap`, the chec
 portforge --port ports/chronos2 --cluster my-cluster.yaml --hours 6 --detach
 ```
 
-Everything lands under `runs/<run>/`: status, agent turns, job receipts, and the frozen harness the campaign is graded by. `--resume` continues a campaign on any backend (`--agent opencode|claude|codex`). Agents get no shell or write access on the controller; TT jobs run sandboxed, on leased cards. `AGENTS.md` covers adding a model and setting up machines.
+Accuracy gates are hard; among passing candidates the controller ranks on a `perf` stage (latency percentiles, a batch scaling curve, board energy from the card's power sensor) by Pareto front, or by `--optimize <metric>` with `--constraint` bounds. Agents search combinations of the TT techniques in `portforge_tt/guides/TT_OPTIMIZATIONS.md`, profile with Tracy through `port_profile`, and record what each source applies in `TRANSFORMS.json`; `python -m portforge_tt.report runs/<run>` prints the ranked candidates.
+
+Everything lands under `runs/<run>/`: status, agent turns, job receipts, the search tree (`search/`), and the frozen harness the campaign is graded by. `--resume` continues a campaign on any backend (`--agent opencode|claude|codex`). Agents get no shell or write access on the controller; TT jobs run sandboxed, on leased cards. `AGENTS.md` covers adding a model and setting up machines.
 
 ## Results
 

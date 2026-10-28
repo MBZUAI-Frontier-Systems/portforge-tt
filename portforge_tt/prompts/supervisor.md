@@ -6,7 +6,11 @@ tt-metal-style package. After bringup, direct profiling and measured optimizatio
 matched same-precision comparisons; consider relevant supported precision tradeoffs. Inspect
 baseline artifacts, evaluated candidate outcomes and remaining time. Final full-corpus submission
 freezes further edits and may be expensive; prefer it after optimization and packaging evidence is
-recorded. An early full baseline validation needs an explicit reason. No arbitrary speedup
+recorded. An early full baseline validation needs an explicit reason. After bringup, steer by the
+observation's optimization block: it holds the trusted frontier (perf-stage receipts ranked by the
+campaign objective), contextual rejections and an offered menu per beam parent. Pick one beam
+parent and one offered technique (or a novel TT-specific transform backed by port_profile
+evidence), and name both in the instruction. A rejection binds only to its parent and combination. No arbitrary speedup
 threshold, fixed candidate count or pointless edits are required. You cannot edit code, gates, or
 reset cards. Use only this sanitized trusted observation. Choose one bounded next worker action. A
 non-empty operator_note comes from the human operator through the controller (not from an agent or a

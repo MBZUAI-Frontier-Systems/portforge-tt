@@ -91,9 +91,9 @@ def load(path):
                 raise ValueError('runtime paths must be absolute')
         if role == 'tt' and 'weights_by_model' in options:
             if __package__:
-                from .models import model_spec
+                from .portforge_models import model_spec
             else:
-                from models import model_spec
+                from portforge_models import model_spec
             weights = options['weights_by_model']
             if not isinstance(weights, dict) or not weights:
                 raise ValueError('weights_by_model must map model keys to checkpoint paths')

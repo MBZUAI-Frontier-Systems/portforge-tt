@@ -15,9 +15,9 @@ for path in (PACK, HARNESS):
         sys.path.insert(0, str(path))
 os.environ.setdefault("PORTFORGE_REPOSITORY_ROOT", str(ROOT.parents[1]))
 
-import models  # noqa: E402
+import portforge_models  # noqa: E402
 
-models.use_registry(PACK / "models.json")
+portforge_models.use_registry(PACK / "models.json")
 
 import port  # noqa: E402
 

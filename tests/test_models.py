@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-import models
+import portforge_models
 
 
 class ModelTests(unittest.TestCase):
@@ -32,10 +32,10 @@ class ModelTests(unittest.TestCase):
 
     def verify(self):
         self.save()
-        return models.verify_checkpoint(self.root, "tiny", registry=self.registry)
+        return portforge_models.verify_checkpoint(self.root, "tiny", registry=self.registry)
 
     def test_real_registry_pins_parakeet_safetensors(self):
-        spec = models.model_spec("parakeet")
+        spec = portforge_models.model_spec("parakeet")
         self.assertEqual(spec["repo_id"], "nvidia/parakeet-tdt-0.6b-v3")
         self.assertEqual(spec["checkpoint_format"], "safetensors")
         self.assertIsNone(spec["weight_index"])
@@ -50,7 +50,7 @@ class ModelTests(unittest.TestCase):
         for extra in ("tokenizer.json", "processor_config.json"):
             self.assertIn(extra, spec["files"])
         with self.assertRaisesRegex(ValueError, "Unknown model"):
-            models.model_spec("parakeet-tdt")
+            portforge_models.model_spec("parakeet-tdt")
 
     def test_safetensors_receipt(self):
         self.assertEqual(set(self.verify()["verified_files"]), {"config.json", "model.safetensors"})
@@ -119,8 +119,8 @@ class ModelTests(unittest.TestCase):
     def test_download_is_pinned_anonymous_and_rejects_corrupt_cache(self):
         download = Mock(return_value=str(self.root))
         with patch.dict("sys.modules", {"huggingface_hub": SimpleNamespace(snapshot_download=download)}), \
-             patch.object(models, "model_spec", return_value=self.spec):
-            receipt = models.download_checkpoint(self.root / "cache", "tiny")
+             patch.object(portforge_models, "model_spec", return_value=self.spec):
+            receipt = portforge_models.download_checkpoint(self.root / "cache", "tiny")
             self.assertEqual(set(receipt["verified_files"]), {"config.json", "model.safetensors"})
             self.assertEqual(download.call_args.kwargs["revision"], self.spec["revision"])
             self.assertEqual(set(download.call_args.kwargs["allow_patterns"]), set(self.spec["files"]))
@@ -128,7 +128,7 @@ class ModelTests(unittest.TestCase):
             size = (self.root / "model.safetensors").stat().st_size
             (self.root / "model.safetensors").write_bytes(b"X" * size)
             with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
-                models.download_checkpoint(self.root / "cache", "tiny")
+                portforge_models.download_checkpoint(self.root / "cache", "tiny")
 
 
 if __name__ == "__main__":
