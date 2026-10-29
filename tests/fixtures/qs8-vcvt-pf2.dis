@@ -1,0 +1,187 @@
+0000000000000000 <xnn_qs8_vcvt_ukernel__rvv_pf2>:
+   0:	lw	a5,4(a3)
+   2:	addi	sp,sp,-64
+   4:	sd	s0,48(sp)
+   6:	sd	s1,40(sp)
+   8:	sd	s3,32(sp)
+   a:	sd	s4,24(sp)
+   c:	sd	ra,56(sp)
+   e:	li	a4,256
+  12:	lh	s3,0(a3)
+  16:	lh	s4,8(a3)
+  1a:	mv	s0,a0
+  1c:	mv	s1,a2
+  1e:	beq	a5,a4,f8 <.L25>
+			1e: R_RISCV_BRANCH	.L25
+  22:	mulw	a2,s3,a5
+  26:	slliw	a4,s4,0x8
+  2a:	addiw	a3,a5,-256
+  2e:	slliw	a3,a3,0x7
+  32:	subw	a4,a4,a2
+  34:	blt	a4,a3,4a <.L7>
+			34: R_RISCV_BRANCH	.L7
+  38:	slliw	a2,a5,0x7
+  3c:	lui	a3,0x8
+  3e:	subw	a2,a5,a2
+  42:	addiw	a3,a3,-1 # 7fff <.L8+0x7e73>
+  44:	addw	a3,a3,a2
+  46:	bge	a3,a4,178 <.L26>
+			46: R_RISCV_BRANCH	.L26
+
+000000000000004a <.L7>:
+  4a:	slliw	s3,s3,0x18
+  4e:	li	a4,511
+  52:	sraiw	s3,s3,0x18
+  56:	blt	a4,a5,a4 <.L27>
+			56: R_RISCV_BRANCH	.L27
+
+000000000000005a <.L9>:
+  5a:	csrwi	vxrm,0
+  5e:	slliw	a4,a5,0x10
+  62:	sraiw	a4,a4,0x10
+
+0000000000000066 <.L11>:
+  66:	vsetvli	a5,s0,e8,m4,ta,ma
+  6a:	vle8.v	v4,(a1)
+  6e:	sub	s0,s0,a5
+  70:	add	a1,a1,a5
+  72:	vwsub.vx	v8,v4,s3
+  76:	vsetvli	zero,zero,e16,m8,ta,ma
+  7a:	vsll.vi	v8,v8,7
+  7e:	vsmul.vx	v8,v8,a4
+  82:	vsadd.vx	v8,v8,s4
+  86:	vsetvli	zero,zero,e8,m4,ta,ma
+  8a:	vnclip.wi	v8,v8,0
+  8e:	vse8.v	v8,(s1)
+  92:	add	s1,s1,a5
+  94:	bnez	s0,66 <.L11>
+			94: R_RISCV_RVC_BRANCH	.L11
+
+0000000000000096 <.L17>:
+  96:	ld	ra,56(sp)
+  98:	ld	s0,48(sp)
+  9a:	ld	s1,40(sp)
+  9c:	ld	s3,32(sp)
+  9e:	ld	s4,24(sp)
+  a0:	addi	sp,sp,64
+  a2:	ret
+
+00000000000000a4 <.L27>:
+  a4:	addiw	a4,a5,-1
+  a8:	and	a4,a4,a5
+  aa:	bnez	a4,5a <.L9>
+			aa: R_RISCV_RVC_BRANCH	.L9
+  ac:	slli	a0,a5,0x20
+  b0:	srli	a0,a0,0x20
+  b2:	sd	a1,8(sp)
+  b4:	auipc	ra,0x0
+			b4: R_RISCV_CALL_PLT	__ctzdi2
+			b4: R_RISCV_RELAX	*ABS*
+  b8:	jalr	ra # b4 <.L27+0x10>
+  bc:	csrwi	vxrm,0
+  c0:	addiw	a4,a0,-8
+  c4:	ld	a1,8(sp)
+  c6:	slli	a4,a4,0x20
+  c8:	srli	a4,a4,0x20
+
+00000000000000ca <.L10>:
+  ca:	vsetvli	a5,s0,e8,m4,ta,ma
+  ce:	vle8.v	v4,(a1)
+  d2:	sub	s0,s0,a5
+  d4:	add	a1,a1,a5
+  d6:	vwsub.vx	v8,v4,s3
+  da:	vsetvli	zero,zero,e16,m8,ta,ma
+  de:	vsll.vx	v8,v8,a4
+  e2:	vsadd.vx	v8,v8,s4
+  e6:	vsetvli	zero,zero,e8,m4,ta,ma
+  ea:	vnclip.wi	v8,v8,0
+  ee:	vse8.v	v8,(s1)
+  f2:	add	s1,s1,a5
+  f4:	bnez	s0,ca <.L10>
+			f4: R_RISCV_RVC_BRANCH	.L10
+  f6:	j	96 <.L17>
+			f6: R_RISCV_RVC_JUMP	.L17
+
+00000000000000f8 <.L25>:
+  f8:	subw	a4,s3,s4
+  fc:	addiw	a3,a4,128
+ 100:	li	a5,255
+ 104:	bltu	a5,a3,136 <.L3>
+			104: R_RISCV_BRANCH	.L3
+ 108:	slliw	a4,a4,0x18
+ 10c:	sraiw	a4,a4,0x18
+
+0000000000000110 <.L4>:
+ 110:	vsetvli	a5,s0,e8,m4,ta,ma
+ 114:	vle8.v	v4,(a1)
+ 118:	sub	s0,s0,a5
+ 11a:	add	a1,a1,a5
+ 11c:	vssub.vx	v4,v4,a4
+ 120:	vse8.v	v4,(s1)
+ 124:	add	s1,s1,a5
+ 126:	bnez	s0,110 <.L4>
+			126: R_RISCV_RVC_BRANCH	.L4
+ 128:	ld	ra,56(sp)
+ 12a:	ld	s0,48(sp)
+ 12c:	ld	s1,40(sp)
+ 12e:	ld	s3,32(sp)
+ 130:	ld	s4,24(sp)
+ 132:	addi	sp,sp,64
+ 134:	ret
+
+0000000000000136 <.L3>:
+ 136:	csrwi	vxrm,0
+ 13a:	slliw	s3,s3,0x18
+ 13e:	sraiw	s3,s3,0x18
+
+0000000000000142 <.L5>:
+ 142:	vsetvli	a5,s0,e8,m4,ta,ma
+ 146:	vle8.v	v4,(a1)
+ 14a:	sub	s0,s0,a5
+ 14c:	add	a1,a1,a5
+ 14e:	vwsub.vx	v8,v4,s3
+ 152:	vsetvli	zero,zero,e16,m8,ta,ma
+ 156:	vsadd.vx	v8,v8,s4
+ 15a:	vsetvli	zero,zero,e8,m4,ta,ma
+ 15e:	vnclip.wi	v8,v8,0
+ 162:	vse8.v	v8,(s1)
+ 166:	add	s1,s1,a5
+ 168:	bnez	s0,142 <.L5>
+			168: R_RISCV_RVC_BRANCH	.L5
+ 16a:	ld	ra,56(sp)
+ 16c:	ld	s0,48(sp)
+ 16e:	ld	s1,40(sp)
+ 170:	ld	s3,32(sp)
+ 172:	ld	s4,24(sp)
+ 174:	addi	sp,sp,64
+ 176:	ret
+
+0000000000000178 <.L26>:
+ 178:	csrwi	vxrm,0
+ 17c:	slliw	a5,a5,0x10
+ 180:	slliw	a3,a4,0x10
+ 184:	sraiw	a5,a5,0x10
+ 188:	sraiw	a3,a3,0x10
+
+000000000000018c <.L8>:
+ 18c:	vsetvli	a4,s0,e16,m8,ta,ma
+ 190:	vle8.v	v4,(a1)
+ 194:	sub	s0,s0,a4
+ 196:	add	a1,a1,a4
+ 198:	vsext.vf2	v8,v4
+ 19c:	vmul.vx	v8,v8,a5
+ 1a0:	vadd.vx	v8,v8,a3
+ 1a4:	vsetvli	zero,zero,e8,m4,ta,ma
+ 1a8:	vnclip.wi	v8,v8,8
+ 1ac:	vse8.v	v8,(s1)
+ 1b0:	add	s1,s1,a4
+ 1b2:	bnez	s0,18c <.L8>
+			1b2: R_RISCV_RVC_BRANCH	.L8
+ 1b4:	ld	ra,56(sp)
+ 1b6:	ld	s0,48(sp)
+ 1b8:	ld	s1,40(sp)
+ 1ba:	ld	s3,32(sp)
+ 1bc:	ld	s4,24(sp)
+ 1be:	addi	sp,sp,64
+ 1c0:	ret
+

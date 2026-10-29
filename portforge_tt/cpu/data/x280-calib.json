@@ -1,0 +1,717 @@
+{
+ "ops": {
+  "vadd.vv": {
+   "e8,m1": {
+    "throughput_cpi": 2.0423,
+    "latency_cpi": 3.0418
+   },
+   "e8,m2": {
+    "throughput_cpi": 4.0529,
+    "latency_cpi": 4.0501
+   },
+   "e8,m4": {
+    "throughput_cpi": 8.3687,
+    "latency_cpi": 8.0455
+   },
+   "e8,m8": {
+    "throughput_cpi": 16.0402,
+    "latency_cpi": 16.0405
+   },
+   "e16,m1": {
+    "throughput_cpi": 2.0475,
+    "latency_cpi": 3.0429
+   },
+   "e16,m2": {
+    "throughput_cpi": 4.0423,
+    "latency_cpi": 4.0425
+   },
+   "e16,m4": {
+    "throughput_cpi": 8.0403,
+    "latency_cpi": 8.0437
+   },
+   "e16,m8": {
+    "throughput_cpi": 16.0412,
+    "latency_cpi": 16.0412
+   },
+   "e32,m1": {
+    "throughput_cpi": 2.0482,
+    "latency_cpi": 3.2384
+   },
+   "e32,m2": {
+    "throughput_cpi": 4.0447,
+    "latency_cpi": 4.044
+   },
+   "e32,m4": {
+    "throughput_cpi": 8.0419,
+    "latency_cpi": 8.0425
+   },
+   "e32,m8": {
+    "throughput_cpi": 16.04,
+    "latency_cpi": 16.0408
+   }
+  },
+  "vmul.vv": {
+   "e8,m1": {
+    "throughput_cpi": 2.0467,
+    "latency_cpi": 7.0415
+   },
+   "e8,m2": {
+    "throughput_cpi": 4.0414,
+    "latency_cpi": 7.0406
+   },
+   "e8,m4": {
+    "throughput_cpi": 8.0402,
+    "latency_cpi": 8.0407
+   },
+   "e8,m8": {
+    "throughput_cpi": 17.0384,
+    "latency_cpi": 16.0394
+   },
+   "e16,m1": {
+    "throughput_cpi": 2.0435,
+    "latency_cpi": 7.0413
+   },
+   "e16,m2": {
+    "throughput_cpi": 4.0412,
+    "latency_cpi": 7.0397
+   },
+   "e16,m4": {
+    "throughput_cpi": 8.039,
+    "latency_cpi": 8.0403
+   },
+   "e16,m8": {
+    "throughput_cpi": 16.0412,
+    "latency_cpi": 16.0378
+   },
+   "e32,m1": {
+    "throughput_cpi": 2.0433,
+    "latency_cpi": 7.0409
+   },
+   "e32,m2": {
+    "throughput_cpi": 4.0414,
+    "latency_cpi": 7.3485
+   },
+   "e32,m4": {
+    "throughput_cpi": 8.0403,
+    "latency_cpi": 8.043
+   },
+   "e32,m8": {
+    "throughput_cpi": 16.0398,
+    "latency_cpi": 16.0431
+   }
+  },
+  "vmacc.vv": {
+   "e8,m1": {
+    "throughput_cpi": 2.0467,
+    "latency_cpi": 7.0432
+   },
+   "e8,m2": {
+    "throughput_cpi": 4.0442,
+    "latency_cpi": 7.0468
+   },
+   "e8,m4": {
+    "throughput_cpi": 8.0435,
+    "latency_cpi": 8.0432
+   },
+   "e8,m8": {
+    "throughput_cpi": 16.0394,
+    "latency_cpi": 16.2677
+   },
+   "e16,m1": {
+    "throughput_cpi": 2.0455,
+    "latency_cpi": 7.0449
+   },
+   "e16,m2": {
+    "throughput_cpi": 4.0415,
+    "latency_cpi": 7.0414
+   },
+   "e16,m4": {
+    "throughput_cpi": 8.0426,
+    "latency_cpi": 8.0415
+   },
+   "e16,m8": {
+    "throughput_cpi": 16.0397,
+    "latency_cpi": 16.0399
+   },
+   "e32,m1": {
+    "throughput_cpi": 2.0439,
+    "latency_cpi": 7.0407
+   },
+   "e32,m2": {
+    "throughput_cpi": 4.0418,
+    "latency_cpi": 7.0423
+   },
+   "e32,m4": {
+    "throughput_cpi": 8.0404,
+    "latency_cpi": 8.3052
+   },
+   "e32,m8": {
+    "throughput_cpi": 16.0368,
+    "latency_cpi": 16.0381
+   }
+  },
+  "vsmul.vv": {
+   "e8,m1": {
+    "throughput_cpi": 2.0433,
+    "latency_cpi": 7.0403
+   },
+   "e8,m2": {
+    "throughput_cpi": 4.0408,
+    "latency_cpi": 7.0403
+   },
+   "e8,m4": {
+    "throughput_cpi": 8.0405,
+    "latency_cpi": 8.0435
+   },
+   "e8,m8": {
+    "throughput_cpi": 16.0411,
+    "latency_cpi": 16.0407
+   },
+   "e16,m1": {
+    "throughput_cpi": 2.0492,
+    "latency_cpi": 7.0445
+   },
+   "e16,m2": {
+    "throughput_cpi": 4.0455,
+    "latency_cpi": 7.0436
+   },
+   "e16,m4": {
+    "throughput_cpi": 8.0422,
+    "latency_cpi": 8.0436
+   },
+   "e16,m8": {
+    "throughput_cpi": 16.0393,
+    "latency_cpi": 16.0392
+   },
+   "e32,m1": {
+    "throughput_cpi": 2.0467,
+    "latency_cpi": 7.041
+   },
+   "e32,m2": {
+    "throughput_cpi": 4.0424,
+    "latency_cpi": 7.0441
+   },
+   "e32,m4": {
+    "throughput_cpi": 8.0407,
+    "latency_cpi": 8.0405
+   },
+   "e32,m8": {
+    "throughput_cpi": 16.2576,
+    "latency_cpi": 16.0385
+   }
+  },
+  "vsadd.vx": {
+   "e8,m1": {
+    "throughput_cpi": 2.043,
+    "latency_cpi": 7.0427
+   },
+   "e8,m2": {
+    "throughput_cpi": 4.0449,
+    "latency_cpi": 7.0402
+   },
+   "e8,m4": {
+    "throughput_cpi": 8.0426,
+    "latency_cpi": 8.0407
+   },
+   "e8,m8": {
+    "throughput_cpi": 16.0401,
+    "latency_cpi": 16.0368
+   },
+   "e16,m1": {
+    "throughput_cpi": 2.0438,
+    "latency_cpi": 7.0411
+   },
+   "e16,m2": {
+    "throughput_cpi": 4.2609,
+    "latency_cpi": 7.0442
+   },
+   "e16,m4": {
+    "throughput_cpi": 8.0404,
+    "latency_cpi": 8.0407
+   },
+   "e16,m8": {
+    "throughput_cpi": 16.0388,
+    "latency_cpi": 16.0409
+   },
+   "e32,m1": {
+    "throughput_cpi": 2.0451,
+    "latency_cpi": 7.041
+   },
+   "e32,m2": {
+    "throughput_cpi": 4.0407,
+    "latency_cpi": 7.0441
+   },
+   "e32,m4": {
+    "throughput_cpi": 8.0385,
+    "latency_cpi": 8.0408
+   },
+   "e32,m8": {
+    "throughput_cpi": 16.2987,
+    "latency_cpi": 16.0391
+   }
+  },
+  "vsll.vi": {
+   "e8,m1": {
+    "throughput_cpi": 2.0427,
+    "latency_cpi": 7.0403
+   },
+   "e8,m2": {
+    "throughput_cpi": 4.0411,
+    "latency_cpi": 7.0425
+   },
+   "e8,m4": {
+    "throughput_cpi": 8.0445,
+    "latency_cpi": 8.0427
+   },
+   "e8,m8": {
+    "throughput_cpi": 16.0374,
+    "latency_cpi": 16.0393
+   },
+   "e16,m1": {
+    "throughput_cpi": 2.0457,
+    "latency_cpi": 7.043
+   },
+   "e16,m2": {
+    "throughput_cpi": 4.0409,
+    "latency_cpi": 7.04
+   },
+   "e16,m4": {
+    "throughput_cpi": 8.3195,
+    "latency_cpi": 8.0452
+   },
+   "e16,m8": {
+    "throughput_cpi": 16.0376,
+    "latency_cpi": 16.0389
+   },
+   "e32,m1": {
+    "throughput_cpi": 2.0435,
+    "latency_cpi": 7.044
+   },
+   "e32,m2": {
+    "throughput_cpi": 4.0412,
+    "latency_cpi": 7.0407
+   },
+   "e32,m4": {
+    "throughput_cpi": 8.0408,
+    "latency_cpi": 8.044
+   },
+   "e32,m8": {
+    "throughput_cpi": 16.0369,
+    "latency_cpi": 16.2556
+   }
+  },
+  "vmseq.vv": {
+   "e8,m1": {
+    "throughput_cpi": 4.0437
+   },
+   "e8,m2": {
+    "throughput_cpi": 6.0427
+   },
+   "e8,m4": {
+    "throughput_cpi": 10.0415
+   },
+   "e8,m8": {
+    "throughput_cpi": 16.0377
+   },
+   "e16,m1": {
+    "throughput_cpi": 4.0416
+   },
+   "e16,m2": {
+    "throughput_cpi": 6.0408
+   },
+   "e16,m4": {
+    "throughput_cpi": 10.0422
+   },
+   "e16,m8": {
+    "throughput_cpi": 18.0376
+   },
+   "e32,m1": {
+    "throughput_cpi": 4.0423
+   },
+   "e32,m2": {
+    "throughput_cpi": 6.0405
+   },
+   "e32,m4": {
+    "throughput_cpi": 10.0418
+   },
+   "e32,m8": {
+    "throughput_cpi": 18.2554
+   }
+  },
+  "vmerge.vvm": {
+   "e8,m1": {
+    "throughput_cpi": 2.0434,
+    "latency_cpi": 3.0434
+   },
+   "e8,m2": {
+    "throughput_cpi": 4.0451,
+    "latency_cpi": 4.0464
+   },
+   "e8,m4": {
+    "throughput_cpi": 8.0396,
+    "latency_cpi": 8.0403
+   },
+   "e8,m8": {
+    "throughput_cpi": 16.0395,
+    "latency_cpi": 16.0401
+   },
+   "e16,m1": {
+    "throughput_cpi": 2.0457,
+    "latency_cpi": 3.0426
+   },
+   "e16,m2": {
+    "throughput_cpi": 4.0427,
+    "latency_cpi": 4.0466
+   },
+   "e16,m4": {
+    "throughput_cpi": 8.0416,
+    "latency_cpi": 8.039
+   },
+   "e16,m8": {
+    "throughput_cpi": 16.2921,
+    "latency_cpi": 16.0384
+   },
+   "e32,m1": {
+    "throughput_cpi": 2.0463,
+    "latency_cpi": 3.0422
+   },
+   "e32,m2": {
+    "throughput_cpi": 4.0417,
+    "latency_cpi": 4.0421
+   },
+   "e32,m4": {
+    "throughput_cpi": 8.0423,
+    "latency_cpi": 8.0401
+   },
+   "e32,m8": {
+    "throughput_cpi": 16.0377,
+    "latency_cpi": 16.0396
+   }
+  },
+  "vrgather.vv": {
+   "e8,m1": {
+    "throughput_cpi": 68.2621
+   },
+   "e8,m2": {
+    "throughput_cpi": 132.2436
+   },
+   "e8,m4": {
+    "throughput_cpi": 260.6357
+   },
+   "e8,m8": {
+    "throughput_cpi": 516.7203
+   },
+   "e16,m1": {
+    "throughput_cpi": 36.2817
+   },
+   "e16,m2": {
+    "throughput_cpi": 68.0399
+   },
+   "e16,m4": {
+    "throughput_cpi": 132.2456
+   },
+   "e16,m8": {
+    "throughput_cpi": 260.6301
+   },
+   "e32,m1": {
+    "throughput_cpi": 20.0415
+   },
+   "e32,m2": {
+    "throughput_cpi": 36.039
+   },
+   "e32,m4": {
+    "throughput_cpi": 68.2416
+   },
+   "e32,m8": {
+    "throughput_cpi": 132.3783
+   }
+  },
+  "vslidedown.vi": {
+   "e8,m1": {
+    "throughput_cpi": 2.0458,
+    "latency_cpi": 4.0449
+   },
+   "e8,m2": {
+    "throughput_cpi": 4.0451,
+    "latency_cpi": 4.0417
+   },
+   "e8,m4": {
+    "throughput_cpi": 8.0401,
+    "latency_cpi": 8.0405
+   },
+   "e8,m8": {
+    "throughput_cpi": 16.2685,
+    "latency_cpi": 16.038
+   },
+   "e16,m1": {
+    "throughput_cpi": 2.0436,
+    "latency_cpi": 4.0422
+   },
+   "e16,m2": {
+    "throughput_cpi": 4.0448,
+    "latency_cpi": 4.045
+   },
+   "e16,m4": {
+    "throughput_cpi": 8.0406,
+    "latency_cpi": 8.0412
+   },
+   "e16,m8": {
+    "throughput_cpi": 16.0394,
+    "latency_cpi": 16.0394
+   },
+   "e32,m1": {
+    "throughput_cpi": 2.0431,
+    "latency_cpi": 4.0416
+   },
+   "e32,m2": {
+    "throughput_cpi": 4.0431,
+    "latency_cpi": 4.0449
+   },
+   "e32,m4": {
+    "throughput_cpi": 8.2616,
+    "latency_cpi": 8.0401
+   },
+   "e32,m8": {
+    "throughput_cpi": 16.0392,
+    "latency_cpi": 16.0396
+   }
+  },
+  "vredsum.vs": {
+   "e8,m1": {
+    "throughput_cpi": 43.037
+   },
+   "e8,m2": {
+    "throughput_cpi": 51.2498
+   },
+   "e8,m4": {
+    "throughput_cpi": 59.0403
+   },
+   "e8,m8": {
+    "throughput_cpi": 67.3014
+   },
+   "e16,m1": {
+    "throughput_cpi": 36.0398
+   },
+   "e16,m2": {
+    "throughput_cpi": 44.2499
+   },
+   "e16,m4": {
+    "throughput_cpi": 52.0364
+   },
+   "e16,m8": {
+    "throughput_cpi": 60.2954
+   },
+   "e32,m1": {
+    "throughput_cpi": 29.0406
+   },
+   "e32,m2": {
+    "throughput_cpi": 37.0366
+   },
+   "e32,m4": {
+    "throughput_cpi": 45.2942
+   },
+   "e32,m8": {
+    "throughput_cpi": 53.0375
+   }
+  },
+  "vwadd.vv": {
+   "e8,m1": {
+    "throughput_cpi": 2.0459
+   },
+   "e8,m2": {
+    "throughput_cpi": 4.0446
+   },
+   "e8,m4": {
+    "throughput_cpi": 8.04
+   },
+   "e16,m1": {
+    "throughput_cpi": 2.0425
+   },
+   "e16,m2": {
+    "throughput_cpi": 4.0443
+   },
+   "e16,m4": {
+    "throughput_cpi": 8.0433
+   }
+  },
+  "vsext.vf2": {
+   "e16,m1": {
+    "throughput_cpi": 2.0426
+   },
+   "e16,m2": {
+    "throughput_cpi": 4.2555
+   },
+   "e16,m4": {
+    "throughput_cpi": 8.0405
+   },
+   "e16,m8": {
+    "throughput_cpi": 16.0384
+   },
+   "e32,m1": {
+    "throughput_cpi": 2.0567
+   },
+   "e32,m2": {
+    "throughput_cpi": 4.0418
+   },
+   "e32,m4": {
+    "throughput_cpi": 8.0407
+   },
+   "e32,m8": {
+    "throughput_cpi": 16.0403
+   }
+  },
+  "vnclip.wi": {
+   "e8,m1": {
+    "throughput_cpi": 4.0462
+   },
+   "e8,m2": {
+    "throughput_cpi": 8.039
+   },
+   "e8,m4": {
+    "throughput_cpi": 16.0379
+   },
+   "e16,m1": {
+    "throughput_cpi": 4.0422
+   },
+   "e16,m2": {
+    "throughput_cpi": 8.0471
+   },
+   "e16,m4": {
+    "throughput_cpi": 16.2505
+   }
+  },
+  "vfadd.vv": {
+   "e32,m1": {
+    "throughput_cpi": 2.0456,
+    "latency_cpi": 7.041
+   },
+   "e32,m2": {
+    "throughput_cpi": 4.0432,
+    "latency_cpi": 7.0394
+   },
+   "e32,m4": {
+    "throughput_cpi": 8.0393,
+    "latency_cpi": 8.0453
+   },
+   "e32,m8": {
+    "throughput_cpi": 16.0395,
+    "latency_cpi": 16.0392
+   }
+  },
+  "vfmacc.vv": {
+   "e32,m1": {
+    "throughput_cpi": 2.0429,
+    "latency_cpi": 7.0403
+   },
+   "e32,m2": {
+    "throughput_cpi": 4.0453,
+    "latency_cpi": 7.0403
+   },
+   "e32,m4": {
+    "throughput_cpi": 8.0402,
+    "latency_cpi": 8.2556
+   },
+   "e32,m8": {
+    "throughput_cpi": 16.0395,
+    "latency_cpi": 16.0376
+   }
+  }
+ },
+ "memory": {
+  "load": {
+   "L1": 31.8425,
+   "L2": 13.5006,
+   "DRAM": 0.7064
+  },
+  "store": {
+   "L1": 31.8437,
+   "L2": 12.0957,
+   "DRAM": 0.5689
+  },
+  "copy": {
+   "L1": 31.921,
+   "L2": 2.0515,
+   "DRAM": 0.6127
+  }
+ },
+ "vsetvl_cpi": 1.0467,
+ "memops": {
+  "vle32.v": {
+   "e32,m1": 5.0527,
+   "e32,m2": 5.0453,
+   "e32,m4": 8.0785
+  },
+  "vse32.v": {
+   "e32,m1": 5.0415,
+   "e32,m2": 5.0438,
+   "e32,m4": 8.0772
+  },
+  "vlse32.v": {
+   "e32,m1": 16.0989,
+   "e32,m2": 32.0908,
+   "e32,m4": 64.5758
+  },
+  "vsse32.v": {
+   "e32,m1": 32.0371,
+   "e32,m2": 64.263,
+   "e32,m4": 128.2575
+  },
+  "vluxei32.v": {
+   "e32,m1": 34.0774,
+   "e32,m2": 70.291
+  },
+  "vsuxei32.v": {
+   "e32,m1": 33.1704,
+   "e32,m2": 64.2487
+  },
+  "vlseg2e32.v": {
+   "e32,m1": 5.0429,
+   "e32,m2": 9.048,
+   "e32,m4": 17.0476
+  },
+  "vsseg2e32.v": {
+   "e32,m1": 5.0458,
+   "e32,m2": 8.0758,
+   "e32,m4": 16.0701
+  },
+  "vlsseg2e32.v": {
+   "e32,m1": 17.252,
+   "e32,m2": 33.0412,
+   "e32,m4": 65.2594
+  },
+  "vssseg2e32.v": {
+   "e32,m1": 16.0747,
+   "e32,m2": 32.0786,
+   "e32,m4": 64.3473
+  },
+  "vlseg4e32.v": {
+   "e32,m1": 19.0404,
+   "e32,m2": 35.0389
+  },
+  "vsseg4e32.v": {
+   "e32,m1": 16.0756,
+   "e32,m2": 32.0709
+  },
+  "vlsseg4e32.v": {
+   "e32,m1": 19.4197,
+   "e32,m2": 35.0434
+  },
+  "vssseg4e32.v": {
+   "e32,m1": 16.0712,
+   "e32,m2": 32.0763
+  },
+  "vlseg8e32.v": {
+   "e32,m1": 32.2751
+  },
+  "vsseg8e32.v": {
+   "e32,m1": 16.0749
+  },
+  "vlsseg8e32.v": {
+   "e32,m1": 32.0409
+  },
+  "vssseg8e32.v": {
+   "e32,m1": 16.0758
+  }
+ },
+ "board": "sifive,x280 4 7.0.0-tt-blackhole-ci24351016986-g711227ac36a9"
+}

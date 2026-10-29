@@ -1,0 +1,79 @@
+{
+ "family": "x32-transposec",
+ "spec": {
+  "formula": "output[c * output_stride/4 + r] = input[r * input_stride/4 + c] for r < block_height, c < block_width (32-bit elements, strides in bytes)",
+  "domain": "block_width, block_height >= 1; input_stride >= 4*block_width, output_stride >= 4*block_height (any multiple of 4, not necessarily a multiple of 64); pointers 4-byte aligned only",
+  "width_bounds": [
+   "pure data movement: no arithmetic, every output element is one input element",
+   "the bytes between block_height*4 and output_stride in each output row (row padding of a sub-tensor view) must stay untouched",
+   "reading past the end of an input row is allowed (XNN_OOB_READS) but never writing past an output row",
+   "must be correct for every VLEN from 128 to 1024: the upstream 8x8/16x8/32x8 kernels are not (they fail at VLEN 128)"
+  ],
+  "regimes": {
+   "single": "XNNPACK's bench: one call over a whole dense block (up to 1024x1024, 4 MiB each way)",
+   "op32": "XNNPACK's transpose operator: 32x32 tiles (edge tiles smaller) with the full-matrix strides",
+   "op32-view": "the operator on a sub-tensor view: odd leading dimensions, base pointer offset by one element"
+  },
+  "measured": {
+   "upstream_best_per_cell": "8xv1 (8 cells), 8xv2 (8), 16x8 (3), 8x8 (1), 8xv4 (1); 32x8 is wrong at VLEN 512",
+   "cycles_per_element": "about 0.5-1.6 for blocks up to 256x256; 13-14 for 1024x1024 (every upstream variant)",
+   "memory_forms_e32_m1_cycles": "vle32 5, vse32 5, vlse32 16, vsse32 32, vlsseg2/4/8 17/19/32, vssseg2/4/8 16/16/16, vlseg8 32, vsseg8 16 (VLEN 512: 16 elements per register)"
+  }
+ },
+ "candidates": [
+  {"id": "segment-loads",
+   "application": "the upstream structure: vlsseg<nf>e32 gathers nf columns of VL rows at input_stride, then nf unit-stride vse32 write nf output rows",
+   "expected_gain": "parity with upstream; the starting point",
+   "preconditions": ["nf * LMUL <= 8"], "sources": ["upstream src/x32-transposec/gen/*-rvv.c"]},
+  {"id": "segment-stores",
+   "application": "mirror the upstream structure: load nf input rows (VL columns each) with unit-stride vle32, write them with one vssseg<nf>e32 at output_stride; segment i is output row (column i) elements r..r+nf-1",
+   "expected_gain": "per 128 elements at m1: 8 vle32 (40 cycles) + 1 vssseg8 (16) vs upstream 1 vlsseg8 (32) + 8 vse32 (40); with larger LMUL on the load side the store side dominates less",
+   "preconditions": ["nf * LMUL <= 8 for the segment store", "column tails: vl covers columns, nf covers rows (tail rows need a smaller nf)"],
+   "sources": ["x280-calib"]},
+  {"id": "max-lmul",
+   "application": "longer unit-stride loads or stores per instruction: vle32 m4 moves 64 elements in 8 cycles vs 16 in 5 at m1",
+   "expected_gain": "fewer fixed per-instruction costs on the unit-stride side",
+   "preconditions": ["segment forms limit nf * LMUL <= 8"], "sources": ["x280-calib"]},
+  {"id": "cache-blocking",
+   "application": "for single calls on large blocks (256x256, 1024x1024 with 4096-byte strides) walk sub-blocks (e.g. 32x32 or 64x16) so each 64-byte input line is used for all its 16 columns before eviction",
+   "expected_gain": "the 1024x1024 cells run 13-14 cycles/element vs ~1 for blocks that fit: large headroom in 2-4 cells",
+   "preconditions": ["sub-block edges handled exactly once"], "sources": ["x280-calib"]},
+  {"id": "k:in-register-transpose", "title": "Unit-stride loads and stores with an in-register transpose",
+   "application": "load rows unit-stride, transpose small tiles in registers with vslideup/vslidedown + vmerge or with e64 zip/unzip (vwaddu.vv + vwmaccu.vx to interleave, vnsrl.wx 0/32 to de-interleave), store rows unit-stride; never vrgather (element-serial)",
+   "expected_gain": "removes strided forms entirely; pays ALU ops at 2 cycles per LMUL and narrowing at 4",
+   "preconditions": ["exact bit movement (no float ops)", "tile edges handled with smaller vl"], "sources": ["rvv-spec", "x280-calib"]},
+  {"id": "k:e64-pairs", "title": "Move 2x2 sub-blocks as 64-bit elements",
+   "application": "treat two adjacent u32 as one u64: strided (segment) forms at e64 carry two elements each, halving the element count of the slow side; split pairs with vnsrl.wx by 0 and 32, join with vwaddu/vwmaccu",
+   "expected_gain": "strided forms are element-serial (1 element/cycle for vlse32): e64 halves their element count",
+   "preconditions": ["input pairs are 8-byte aligned only sometimes: e64 loads need 8-byte alignment on RVV or they may trap/emulate; check alignment and fall back"],
+   "sources": ["rvv-spec", "x280-calib"]},
+  {"id": "load-ahead",
+   "application": "issue the next segment load before draining the current one's stores (upstream 8xv2 does this)",
+   "expected_gain": "small; the vector unit is decoupled",
+   "preconditions": [], "sources": ["upstream 8xv2"]},
+  {"id": "regime-dispatch",
+   "application": "dispatch once per call on block shape and strides: full 32x32 operator tiles, narrow edge tiles (width or height < 8), and large single calls take different paths",
+   "expected_gain": "edge tiles (7x300, 1024x32 sweeps) are a third of the cells; one path tuned for 32x32 is not best for 7-wide",
+   "preconditions": ["predicates on block_width, block_height and strides only, never on data"], "sources": ["vcvt-report"]},
+  {"id": "runtime-vlen-tiles",
+   "application": "read vlenb once and size the tile height to VLMAX (16 rows per m1 register at VLEN 512) so one segment op covers a 32-row tile; stays correct at VLEN 128-1024",
+   "expected_gain": "the fixed-tile upstream kernels are fast where valid but wrong elsewhere; a VLA kernel with the same shape at VLEN 512 keeps the speed and the correctness",
+   "preconditions": ["correct at VLEN 128, 256, 512, 1024"], "sources": ["upstream 16x8/32x8 failures at VLEN 128"]},
+  {"id": "k:tail-by-vl", "title": "Column/row tails by a shorter vl or nf instead of a switch",
+   "application": "replace the switch over block_width % 8 (seven cases of segment ops) with a smaller vl on the VLA dimension and a single smaller-nf path on the other",
+   "expected_gain": "less code and fewer branches on edge tiles (op32 cells with widths 7, 13, 21)",
+   "preconditions": ["segment nf is an immediate: one instruction per nf value"], "sources": ["upstream 16x8"]},
+  {"id": "hoist-invariants",
+   "application": "compute row/column pointers and byte strides once per call; avoid 8 output pointer increments per tile when one base plus constant offsets works",
+   "expected_gain": "small blocks (32x32 operator tiles: ~280 ns) are dominated by setup",
+   "preconditions": [], "sources": ["upstream 16x8"]},
+  {"id": "avoid-gather",
+   "application": "an in-register transpose must not use vrgather: 68 cycles at e8m1 on the X280",
+   "expected_gain": "avoids a 10x slowdown", "preconditions": [], "sources": ["x280-calib"]}
+ ],
+ "mined_from": [
+  "XNNPACK 96eaa532 src/x32-transposec: scalar, neon zip, sse, avx, wasmsimd, hvx and 7 RVV variants (8xv1/2/4 optimized by Autocomp)",
+  "SALTyRN optimized-rvv-kernels x32transpose.c (identical to upstream 8xv2)",
+  "X280 calibration 2026-10-28 (memops table) and the x32-transposec dry-run bench (best upstream per cell, A/A of identical kernels)"
+ ]
+}

@@ -159,6 +159,31 @@ def tree(cfg, name, base="xnnpack-saltyrn"):
     return path
 
 
+TESTERS = {"vunary-microkernel-tester.h": "vunary", "vbinary-microkernel-tester.h": "vbinary"}
+
+
+def signature_of(tree, inc):
+    """The registry's kernel signature, read from the tester its gtest includes
+    (vunary, vbinary, ...); None when the family uses another tester."""
+    for cc in sorted((Path(tree) / "test").glob("*.cc")):
+        text = cc.read_text(errors="ignore")
+        if f'"{inc}"' in text:
+            for header, signature in TESTERS.items():
+                if header in text:
+                    return signature
+    return None
+
+
+def variants(tree, inc):
+    """{arch_flag: [ukernel, ...]} for every registry entry of a family: the
+    cross-ISA variants (Neon, SSE, AVX, WASM, HVX, RVV) a researcher reads."""
+    out = {}
+    for _macro, args, _line in registry_lines((Path(tree) / inc).read_text()):
+        if len(args) > 1:
+            out.setdefault(args[0], []).append(args[1])
+    return out
+
+
 def targets_for(tree, inc):
     """Test and bench targets whose sources include the registry `inc`."""
     tree = Path(tree)
@@ -180,18 +205,28 @@ def build_dir(cfg, name):
     return cfg.build / f"xnnpack-{name}-rv64"
 
 
-def build(cfg, tree_path, name, targets=None, log=print):
-    """Configure (once) and build the riscv64 tree; targets None builds everything."""
+def build(cfg, tree_path, name, targets=None, log=print, cflags=""):
+    """Configure (once) and build the riscv64 tree; targets None builds everything.
+
+    `cflags` (e.g. "-falign-functions=64 -falign-loops=64") is added to every C
+    compile; a build dir configured with other flags is reconfigured."""
     out = build_dir(cfg, name)
     src_c, out_c = host.in_container(cfg, tree_path), host.in_container(cfg, out)
     configure = ""
+    stamp = out / "portforge-cflags.txt"
+    if (out / "build.ninja").exists() and (stamp.read_text() if stamp.exists() else "") != cflags:
+        (out / "CMakeCache.txt").unlink(missing_ok=True)
+        (out / "build.ninja").unlink()
     if not (out / "build.ninja").exists():
         configure = (f"cmake -S {src_c} -B {out_c} -G Ninja -DCMAKE_BUILD_TYPE=Release "
                      f"-DCMAKE_TOOLCHAIN_FILE={src_c}/cmake/riscv64.toolchain "
                      "-DXNNPACK_ENABLE_RISCV_FP16_VECTOR=OFF -DXNNPACK_BUILD_TESTS=ON "
                      "-DXNNPACK_BUILD_BENCHMARKS=ON -DCMAKE_C_COMPILER_LAUNCHER=ccache "
-                     "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache > " + f"{out_c}.configure.log 2>&1 && ")
+                     "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache "
+                     + (f"-DCMAKE_C_FLAGS={shlex.quote(cflags)} " if cflags else "")
+                     + "> " + f"{out_c}.configure.log 2>&1 && ")
         out.mkdir(parents=True, exist_ok=True)
+        stamp.write_text(cflags)
     tlist = " ".join(shlex.quote(t) for t in (targets or []))
     script = (f"export CCACHE_DIR=/pf/build/.ccache; {configure}"
               f"ninja -k 0 -C {out_c} -j{cfg.jobs} {tlist} > {out_c}.build.log 2>&1")
@@ -226,6 +261,44 @@ def parse_gtest(report):
             else:
                 status[name] = "pass"
     return status, messages
+
+
+def list_tests(cfg, name, target, gtest_filter, vlen=128):
+    """Names of the tests `gtest_filter` selects, listed under QEMU (no tests run)."""
+    exe = binary(cfg, name, target)
+    script = (f"cd {host.in_container(cfg, exe.parent)} && {host.qemu_prefix(vlen)} ./{target} "
+              f"--gtest_list_tests --gtest_filter={shlex.quote(gtest_filter)}")
+    proc = host.run(cfg, script, check=False, timeout=600)
+    names, suite = [], None
+    for line in proc.stdout.splitlines():
+        if not line.strip() or line.startswith("Running main()"):
+            continue
+        if not line.startswith(" "):
+            suite = line.split("#")[0].strip()
+        elif suite:
+            names.append(suite + line.split("#")[0].strip())
+    return names
+
+
+def test_verdict(summaries, expected):
+    """(passed, problems) over run_tests summaries.
+
+    A run passes only if it wrote a report, failed nothing and ran exactly the
+    `expected` tests (from list_tests). A crash, a timeout, a filter that matches
+    nothing, or a binary that silently skips tests is a failure, not a pass.
+    """
+    problems = []
+    if not expected:
+        problems.append("the filter selects no tests")
+    for s in summaries:
+        where = f"{s.get('target')}@{s.get('where')}"
+        if s.get("error"):
+            problems.append(f"{where}: {s['error']}")
+        elif s.get("failed"):
+            problems.append(f"{where}: {s['failed']} failed")
+        elif s.get("passed", 0) != expected:
+            problems.append(f"{where}: ran {s.get('passed', 0)} of {expected} tests")
+    return not problems, problems
 
 
 def run_tests(cfg, name, target, gtest_filter, where, out_dir):

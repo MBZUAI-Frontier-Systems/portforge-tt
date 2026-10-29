@@ -1,0 +1,12 @@
+{
+  "family": "<family>",
+  "spec": {"formula": "<exact formula of the scalar reference>", "domain": "<init output range>",
+           "width_bounds": ["<every intermediate's range>"]},
+  "candidates": [
+    {"id": "max-lmul", "application": "<how it applies here>", "expected_gain": "<which cells, how much>",
+     "preconditions": [], "sources": ["autocomp-menu"]},
+    {"id": "k:<local-idea>", "title": "<one line>", "application": "<how>", "expected_gain": "<why>",
+     "preconditions": [], "sources": []}
+  ],
+  "mined_from": ["<files and commits read>"]
+}

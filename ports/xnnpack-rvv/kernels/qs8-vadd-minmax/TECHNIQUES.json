@@ -1,0 +1,50 @@
+{
+ "family": "qs8-vadd-minmax",
+ "spec": {
+  "formula": "y = clamp(asr(acc, shift) + output_zero_point, output_min, output_max), acc = bias + a*a_multiplier + b*b_multiplier (int32, a and b int8)",
+  "domain": "from xnn_init_qs8_add_minmax_scalar_params: shift in [13, 30] (scale ratios in [2^-10, 2^8)); |a_multiplier|, |b_multiplier| <= 2^21 and the larger one >= 2^20 (either may be negative if a scale is negative); bias = 2^(shift-1) - a_multiplier*a_zero_point - b_multiplier*b_zero_point; output_min = -128 and output_max = 127 always (the init sets them); zero points in [-128, 127]",
+  "width_bounds": [
+   "acc = 2^(shift-1) + am*(a - azp) + bm*(b - bzp): |a - azp| <= 255, so |acc| < 2^29 + 2*255*2^21 < 2^31 (no int32 overflow; the exact value always fits)",
+   "a*am alone needs 29 bits: a 32-bit chain is needed unless the multipliers are reduced first",
+   "exact reduction: if 2^k divides both am and bm (k <= shift), floor((bias + am*a + bm*b) / 2^shift) = floor((bias >> k) + (am>>k)*a + (bm>>k)*b) >> (shift - k)) (floor of a sum of integers plus a fraction in [0,1))",
+   "XNNPACK's bench quantization (all scale 1, zero point 0) and any residual add with one quantization give am = bm = 2^20 = 2^shift: then y = sat8(a + b - azp - bzp + ozp) exactly",
+   "asr then +ozp then clamp to [-128,127] equals: narrowing with saturation to int16 (vnclip, round-down) then saturating +ozp then saturating narrow to int8, because int16 saturation keeps every value outside [-383, 382] outside the int8 range"
+  ],
+  "regimes": {
+   "bench": "am = bm = 2^20, shift 20 (XNNPACK bench)",
+   "gtest": "odd am != bm, shift 20",
+   "residual": "one quantization for a, b and y: am = bm = 2^20",
+   "same-ab": "am = bm, not a power of two",
+   "mixed": "unrelated odd multipliers",
+   "shift30": "shift 30 (maximum); bias near 2^29",
+   "shift13": "shift 13 (minimum), zero points at the extremes",
+   "b-dominant": "one tiny multiplier (about 105), one near 2^20"
+  },
+  "measured": {
+   "upstream": "rvv_u1v / rvv_u2v: sign-extend to e32 at m4/m8, two vmul.vx, two vadd, vsra, vadd, vmax, vmin, two vncvt per element group (about 10 e32 ops)",
+   "x280_costs": "ALU ops cost 2 cycles per LMUL (an e32m8 op is 16 cycles); narrowing 4 per LMUL; vsetvl about 1; libgcc calls (e.g. __ctzdi2 for __builtin_ctz: XNNPACK compiles RVV without Zbb) cost far more than they save on small batches"
+  }
+ },
+ "candidates": [
+  {"id": "vnclip-requant", "application": "replace vsra + vadd(ozp) + vmax + vmin at e32 and the two vncvt with vnclip.wx (e32->e16, vxrm round-down, saturating), vsadd ozp at e16, vnclip.wi 0 (e16->e8): exact by the saturation bound in the spec", "expected_gain": "removes 4 e32m8 ops (64 cycles per 128 elements) of the ~10", "preconditions": ["output_min/output_max are -128/127 for every params the init produces", "vxrm must be set to round-down (rdn) explicitly"], "sources": ["rvv-guide"]},
+  {"id": "fused-macc", "application": "acc = bias + a*am then vmacc.vx with b and bm: one op instead of vmul + vadd", "expected_gain": "one e32m8 op per group", "preconditions": [], "sources": ["autocomp-menu"]},
+  {"id": "fold-bias-scalar", "application": "start the accumulator from the bias with vmv.v.x / vmadd so no separate add is needed", "expected_gain": "one e32 op", "preconditions": [], "sources": ["vcvt-report"]},
+  {"id": "regime-dispatch", "application": "dispatch once per call on proven predicates of (am, bm, shift, bias): e.g. am == bm == 2^shift (bench, residual adds) to an e16 path, shared-multiplier and power-of-two-factor paths, the general e32 path otherwise", "expected_gain": "4-8x in the regimes with exact narrow paths (bench, residual); none elsewhere", "preconditions": ["each path exact on its whole predicate domain; never test particular values seen in the matrix", "predicates cost a few scalar ops (no libgcc calls)"], "sources": ["vcvt-report"]},
+  {"id": "k:pow2-factor-reduction", "title": "Divide out the common power of two of both multipliers",
+   "application": "k = min(ctz(am), ctz(bm), shift): use am>>k, bm>>k, bias>>k (arithmetic) and shift-k; when the reduced multipliers and bias keep acc within 16 bits for every int8 a, b (check the bound once per call), run the whole chain at e16 with widening ops from e8", "expected_gain": "e16 chains are half the cost of e32 at equal elements; e8->e16 widening replaces vsext.vf4", "preconditions": ["prove the floor identity in the spec for the reduced terms", "ctz without libgcc: a bounded loop or bit tricks, the X280 has Zbb but XNNPACK's -march does not"], "sources": ["vcvt-report (regime D1)"]},
+  {"id": "k:shared-multiplier", "title": "One multiply when am == bm",
+   "application": "acc = bias + am*(a + b) with a + b computed at e16 (fits 9 bits): one widening/e32 multiply instead of two", "expected_gain": "one e32 multiply fewer in residual-style adds", "preconditions": ["exact: integer distributivity, no overflow by the spec's bound"], "sources": []},
+  {"id": "narrow-sew-chain", "application": "keep as much of the chain as possible at e16 (input sums, zero-point handling) and widen only for the multiply", "expected_gain": "fewer e32 ops", "preconditions": ["width bounds in the spec"], "sources": ["vcvt-report"]},
+  {"id": "widen-fused", "application": "vwadd/vwmul/vwmacc from e8/e16 instead of vsext.vf4 then e32 ops", "expected_gain": "skips the sign-extension ops (vsext.vf4 at e32m8 is 16+ cycles)", "preconditions": ["scalar operand of .vx widening ops is SEW-wide: a 21-bit multiplier does not fit an e16 scalar"], "sources": ["rvv-guide"]},
+  {"id": "max-lmul", "application": "choose the LMUL that keeps e32 groups in registers without spills (e8m2 -> e32m8 as upstream, or e8m1 -> e32m4 with more ILP)", "expected_gain": "register pressure vs instruction count", "preconditions": [], "sources": ["rvv-guide"]},
+  {"id": "avoid-libcalls", "application": "no __builtin_ctz/__builtin_clz in dispatch code (they become libgcc calls without Zbb)", "expected_gain": "avoids pf2's 0.82x at small batches in qs8-vcvt", "preconditions": [], "sources": ["vcvt-report"]},
+  {"id": "hoist-invariants", "application": "compute derived scalars (reduced multipliers, shifts, folded bias) once before the loop", "expected_gain": "small batches (256) are dominated by setup", "preconditions": [], "sources": ["autocomp-menu"]},
+  {"id": "load-ahead", "application": "issue next iteration's loads of a and b before this iteration's chain", "expected_gain": "rejected on qs8-vcvt in L1 (0.97x); may matter with two input streams at DRAM sizes", "preconditions": [], "sources": ["vcvt-report"]}
+ ],
+ "mined_from": [
+  "XNNPACK 867d5a3 src/qs8-vadd: scalar, neon, sse2/sse41/avx/avx2/avx512 mul16/mul32, wasmsimd, hvx and rvv u1v/u2v",
+  "xnn_init_qs8_add_minmax_scalar_params (src/microparams-init.c): the parameter domain",
+  "SALTyRN optimized-rvv-kernels qs8-vadd-minmax.c (wrong at shift 30: int32 overflow of ozp << shift)",
+  "qs8-vcvt campaign (regime dispatch, libgcc ctz) and the X280 calibration"
+ ]
+}

@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "kind": "kernel",
+  "key": "<pack-key>",
+  "title": "<library> kernels on RISC-V Vector",
+  "task": "Port and optimize <library> kernels to RVV; every candidate is gated by bit-exact differential checks over the parameter-regime matrix, upstream tests, bounded formal equivalence where available, and timed on the X280 against the best upstream kernel.",
+  "upstream": {"repo": "<url>", "revision": "<40-char commit>", "license": "<license>"},
+  "hardware": {
+    "development": "qemu-riscv64 in portforge-rvv-host at VLEN 128/256/512/1024 (functional only)",
+    "performance": "SiFive X280 (RVV 1.0, VLEN 512) via tt-bh-linux on a Blackhole card"
+  },
+  "optimization": {"primary": "speedup_geomean", "constraints": ["worst_cell>=0.995"],
+                   "pareto": ["speedup_geomean", "worst_cell", "text_bytes"]},
+  "deliverable": "kernel source + registration in the upstream build and test registry, following the library's contribution conventions"
+}

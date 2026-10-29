@@ -1,0 +1,44 @@
+{
+  "family": "qs8-vcvt",
+  "reference": "xnn_qs8_vcvt_ukernel__scalar_u4",
+  "bench_shapes": [256, 16320, 130560, 4194304],
+  "reference_cell": "bench@16320",
+  "check_batches": [1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129, 255, 256, 257, 511, 512, 513, 1023, 1024, 1025, 4099],
+  "inputs": {"dist": "full"},
+  "regimes": [
+    {"id": "bench", "a": {"scale": 0.5, "zero_point": 1}, "out": {"scale": 0.7, "zero_point": -1},
+     "why": "XNNPACK's vunary bench quantization: multiplier 183 (REPORT regime C)"},
+    {"id": "a-identity", "a": {"scale": 1.0, "zero_point": 0}, "out": {"scale": 1.0, "zero_point": 0},
+     "why": "m=256, zero points 0: the gtest default (regime A)"},
+    {"id": "a-zp-min", "a": {"scale": 1.0, "zero_point": -128}, "out": {"scale": 1.0, "zero_point": -128},
+     "why": "m=256, s=0 at int8 min (regime A)"},
+    {"id": "b-wide-s", "a": {"scale": 1.0, "zero_point": -128}, "out": {"scale": 1.0, "zero_point": 127},
+     "why": "m=256, s=-255 outside int8 (regime B)"},
+    {"id": "c-m4", "a": {"scale": 1.0, "zero_point": 0}, "out": {"scale": 64.0, "zero_point": 0},
+     "why": "m=4: gtest output_scale max (regime C)"},
+    {"id": "c-m1", "a": {"scale": 0.004, "zero_point": 9}, "out": {"scale": 1.0, "zero_point": -9},
+     "why": "m=1 near the init's minimum ratio (regime C)"},
+    {"id": "d1-m1024", "a": {"scale": 4.0, "zero_point": 0}, "out": {"scale": 1.0, "zero_point": 0},
+     "why": "m=1024: gtest input_scale (regime D1)"},
+    {"id": "d1-m32768", "a": {"scale": 128.0, "zero_point": 0}, "out": {"scale": 1.0, "zero_point": 0},
+     "why": "m=32768, the init's inclusive maximum; upstream rvv_u*v truncate it to int16 (regime D1)"},
+    {"id": "d2-m384", "a": {"scale": 1.5, "zero_point": 0}, "out": {"scale": 1.0, "zero_point": 0},
+     "why": "non-power-of-two m >= 512 cannot fit i16 (regime D2)"},
+    {"id": "d2-m32765", "a": {"scale": 127.99, "zero_point": -5}, "out": {"scale": 1.0, "zero_point": 7},
+     "why": "just under the maximum ratio (regime D2)"},
+    {"id": "d2-zp-extremes", "a": {"scale": 0.0123, "zero_point": -128}, "out": {"scale": 0.0456, "zero_point": 127},
+     "why": "small odd ratio with zero points at both extremes (m=69, D2)"}
+  ],
+  "check_extra": [
+    {"id": "zp-max", "a": {"scale": 1.0, "zero_point": 127}, "out": {"scale": 1.0, "zero_point": 127}},
+    {"id": "m396-zp", "a": {"scale": 1.7, "zero_point": -3}, "out": {"scale": 1.1, "zero_point": 2}},
+    {"id": "m16384", "a": {"scale": 64.0, "zero_point": 0}, "out": {"scale": 1.0, "zero_point": 0}},
+    {"id": "m512-zp", "a": {"scale": 2.0, "zero_point": 100}, "out": {"scale": 1.0, "zero_point": -100}}
+  ],
+  "heldout": {
+    "count": 4,
+    "sample": {"a.scale": ["loguniform", 0.0039, 128.0], "a.zero_point": ["int", -128, 127],
+               "out.scale": ["choice", [1.0]], "out.zero_point": ["int", -128, 127]},
+    "accept": "1/256 <= a_scale / out_scale <= 128"
+  }
+}

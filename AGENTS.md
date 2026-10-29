@@ -98,3 +98,83 @@ agents, stop the controller and `--resume` with a `--resume-note`; editing the
 workspace's STATE.md does not reach the supervisor as a trusted instruction. If
 you share a failing held-out case with the agents, record that its later result
 is no longer blind.
+
+# Optimizing a CPU kernel family (RVV; `ports/xnnpack-rvv` is the reference pack)
+
+Kernel campaigns use their own orchestrator (`python -m portforge_tt.kernel`), not the
+model loop above. The controller runs the agents; every trusted gate runs on the x86
+host (`tt_box`: toolchain image, QEMU, XNNPACK builds) and the SiFive X280 on the
+Blackhole card. Read `portforge_tt/cpu/README.md` and `portforge_tt/guides/RVV_TECHNIQUES.md`
+first. As above, decisions marked **Ask** belong to the user; never start a campaign,
+boot the X280 or spend board time without their go-ahead, and check the board is idle
+before timing (other agents share it).
+
+## 1. Choose the family and its baseline
+
+**Ask**: which kernel family, and what counts as the baseline (default: the fastest
+correct upstream RVV variant per cell; families without one use autovectorized scalar,
+labelled as such).
+
+- Add the family to `ports/<pack>/families.json` (`evaluate.build_families`): its
+  registry, the Neon ukernel it ports from, signature, init function, upstream RVV
+  variants and whether the formal gate has a prepped Neon source.
+
+Data-movement families (transposes) take no params: their regimes are call layouts
+(one call, XNNPACK's 32x32 operator sweep, padded views) over "WxH" shapes; see
+`kernels/x32-transposec/regimes.json`. A family may build from current upstream
+(`base`), add compile flags (`cflags`, e.g. code alignment when identical kernels time
+apart) and register candidates with a different gtest tile (`overrides`).
+
+## 2. Write the regime matrix with the user
+
+**Ask**: the parameter regimes that matter and the shapes. A kernel's speed and
+correctness depend on its parameters, so `kernels/<family>/regimes.json` lists init
+*arguments* (quantization, op params), not param structs: the harness calls each
+kernel's own init. Include the XNNPACK bench params, the gtest params, the init
+envelope's extremes and one regime per code path you know of; add `check_extra` for
+correctness-only extremes and a `heldout` sampler (it must respect the init's asserts).
+Schema: `portforge_tt/cpu/regimes.py`.
+
+## 3. Write the technique file
+
+`kernels/<family>/TECHNIQUES.json` (schema: `catalogue.validate_kernel`): the exact
+formula, domain and width bounds, and candidate techniques (catalogue ids or local
+`k:<name>` ideas) with how each applies here and why it might win. Mine it from every
+arch variant of the family (`xnnpack.variants`), upstream commits, existing REPORTs
+and the catalogue. Never record outcomes in it: the search tree does that, per parent
+and combination, so a technique that lost once stays available.
+
+## 4. Calibrate and dry-run (once per board, then per family)
+
+**Ask** before using the board.
+
+- `cpu.calibrate.run(cfg)` measures per-op costs and bandwidth (`data/x280-calib.json`
+  is the reference copy). A/A sessions (`evaluate.noise_session`) give the noise floor δ.
+- `python -m portforge_tt.kernel evaluate --family F --seed-kernel name=path [--import ...]`
+  runs the trusted gates (G0 compile + static profile, G1 gtests, G2 bit-exact check,
+  G3/G4 board bench) on known kernels without agents. The ordering must match what is
+  known about them before a campaign is worth running.
+
+## 5. Launch and supervise
+
+**Ask**: the agent backend, workers, rounds, hours, board minutes and planner
+(`thompson`, mechanical; or `llm`).
+
+```sh
+.venv/bin/python -m portforge_tt.kernel run --family F --seed-kernel best=path \
+    --rounds 10 --workers 4 --beam 4 --plans 6 --board-minutes 240 --agent claude
+```
+
+To stop without losing work, `touch runs/kernel/<run>/STOP`: the controller exits after
+the current round; rerun the same command to resume (board seconds and active hours
+already spent still count; nodes lost to host or network errors are re-evaluated).
+
+Read `runs/kernel/<run>/status.json`, `plans/round-*.json` and `REPORT.md`
+(`python -m portforge_tt.kernel report runs/kernel/<run>`). The default objective is
+the geomean speedup over the matrix with no cell slower than the baseline beyond δ.
+A flagged cell is re-measured with twice the rounds in a new lease, and only a flag
+seen in both sessions makes a candidate infeasible. The Pareto front over (speedup, worst cell, code size) is always reported. The report also shows, from
+the same timing rows, the speedup over upstream kernels correct at every VLEN ("portable")
+and over the kernel XNNPACK dispatches on the X280 (`dispatched_x280` in families.json). Certify the
+frontier (held-out regimes, SMT where the family has a prepped Neon source, X280
+gtests, a second bench session) before calling anything a result.

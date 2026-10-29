@@ -1,0 +1,56 @@
+{
+  "family": "qs8-vcvt",
+  "spec": {
+    "formula": "y = sat8(rhu((x - izp) * m / 256) + ozp), rhu(z) = floor(z + 1/2)",
+    "domain": "m = lrintf(256 * in_scale / out_scale) in [1, 32768]; izp, ozp in [-128, 127]; x int8",
+    "width_bounds": [
+      "(x - izp) in [-255, 255]: fits i16",
+      "(x - izp) * m reaches 255 * 32768: needs more than i16 unless m < 128",
+      "m * x + b with b = 256*ozp - m*izp fits i16 iff b - 128m >= -32768 and b + 127m <= 32767 (regime C)",
+      "m == 32768 is not an i16 vsmul operand (upstream rvv_u*v truncate it)"
+    ],
+    "regimes": {
+      "A": "m == 256 and izp - ozp in int8: one vssub",
+      "B": "m == 256 otherwise: vwsub, vsadd, vnclip(0)",
+      "C": "m*x + b fits i16: vwadd(0), vmul, vadd(b), vnclip(8, RNU)",
+      "D1": "m = 2^p, p in [9, 15]: vwsub, vsll, vsadd, vnclip(0)",
+      "D2": "everything else: the 5-op vsmul chain"
+    }
+  },
+  "candidates": [
+    {"id": "narrow-sew-chain", "application": "keep the chain at e16 (pf1); the i32 chain is half speed",
+     "expected_gain": "baseline parity with u4v", "preconditions": ["width bounds above"], "sources": ["vcvt-report"]},
+    {"id": "regime-dispatch", "application": "dispatch A/B/C/D1/D2 on (m, izp, ozp) once per call",
+     "expected_gain": "1.18x at the bench params (C), 4.5x at m=256 (A), 1.0x in D2", "preconditions": ["regimes complete and disjoint"],
+     "sources": ["vcvt-report"]},
+    {"id": "single-op-regime", "application": "regime A as one vssub.vx at e8m4",
+     "expected_gain": "memory-bound: ~4.5x at L1 shapes", "preconditions": ["izp - ozp fits int8"], "sources": ["vcvt-report"]},
+    {"id": "fold-bias-scalar", "application": "regime C moves both zero points into b = 256*ozp - m*izp",
+     "expected_gain": "4 ops instead of 5 (~20%)", "preconditions": ["regime C predicate"], "sources": ["vcvt-report"]},
+    {"id": "avoid-libcalls", "application": "pf2's D1 path calls __ctzdi2 (no Zbb under -march=rv64gcv); costs 18% at batch 256",
+     "expected_gain": "removes the D1 small-batch regression (0.82x -> ~1.2x at 256)", "preconditions": [], "sources": ["vcvt-report"]},
+    {"id": "k:ctz-from-float-exponent", "title": "Exponent of a power-of-two multiplier from its float bits",
+     "application": "for m = 2^p, p = ((bits(float(m)) >> 23) & 0xff) - 127: two scalar FPU/int ops, no libcall, no Zbb",
+     "expected_gain": "same as avoid-libcalls", "preconditions": ["m exactly representable (m <= 2^24)"], "sources": []},
+    {"id": "k:b-zero-subregime", "title": "Regime C with b == 0: vwadd, vmul, vnclip (3 ops)",
+     "application": "skip the vadd when both zero points make b vanish (gtest output_scale cases)",
+     "expected_gain": "~25% in that sub-regime; never hit at the bench params", "preconditions": ["b == 0"], "sources": ["vcvt-report"]},
+    {"id": "k:vmacc-hoisted-bias", "title": "3-op chain via vmacc with a hoisted bias vector",
+     "application": "vmacc destroys its accumulator, so the broadcast costs one op per iteration; rejected on paper in round 2",
+     "expected_gain": "none alone; maybe with a different register schedule or unroll", "preconditions": [], "sources": ["vcvt-report"]},
+    {"id": "k:fold-bias-into-vsmul", "title": "Fold the bias into vsmul via a pre-biased input",
+     "application": "needs m | 128*(127 + 256*ozp); false at m=183, so only a sub-regime",
+     "expected_gain": "one op in the sub-regime where it holds", "preconditions": ["divisibility predicate"], "sources": ["vcvt-report"]},
+    {"id": "max-lmul", "application": "e8m4 -> e16m8 is already the max for the widened stage; e8m8 needs e16m16 (illegal)",
+     "expected_gain": "none expected at m8", "preconditions": [], "sources": ["x280-calib"]},
+    {"id": "load-ahead", "application": "rejected at 0.97x (vmv4r + extra vsetvl); retry only with a schedule that avoids the copy",
+     "expected_gain": "only at L2/DRAM shapes, if at all", "preconditions": [], "sources": ["vcvt-report"]},
+    {"id": "runtime-vlen-tiles", "application": "u-variant pick from vlenb", "expected_gain": "unknown at VLEN 512",
+     "preconditions": [], "sources": ["rvv-guide"]}
+  ],
+  "mined_from": [
+    "ports/xnnpack-rvv/kernels/qs8-vcvt/REPORT.md (rounds 1-2)",
+    "xnnpack-saltyrn src/qs8-vcvt/gen/*.c (scalar, neon, sse, avx2, wasm, rvv)",
+    "calibration session 2026-10-28 (pf2 D1 0.816x at batch 256, __ctzdi2 in the profile)"
+  ]
+}

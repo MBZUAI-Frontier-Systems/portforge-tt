@@ -1,0 +1,14 @@
+[
+  {"a_zero_point": 0, "b_zero_point": 0, "bias": 524288, "a_multiplier": 1048576, "b_multiplier": 1048576, "shift": 20, "output_zero_point": 0, "output_min": -128, "output_max": 127},
+  {"a_zero_point": 7, "b_zero_point": -5, "bias": 1572864, "a_multiplier": 1048576, "b_multiplier": 1572864, "shift": 21, "output_zero_point": 4, "output_min": -128, "output_max": 127},
+  {"a_zero_point": -128, "b_zero_point": 127, "bias": -116450251, "a_multiplier": 341203, "b_multiplier": 1264949, "shift": 20, "output_zero_point": -1, "output_min": -128, "output_max": 127},
+  {"a_zero_point": 127, "b_zero_point": -128, "bias": 1572864, "a_multiplier": 1048576, "b_multiplier": 1048576, "shift": 20, "output_zero_point": 127, "output_min": -128, "output_max": 127},
+  {"a_zero_point": -128, "b_zero_point": -128, "bias": 268959744, "a_multiplier": 1048576, "b_multiplier": 1048576, "shift": 20, "output_zero_point": -128, "output_min": -128, "output_max": 127},
+  {"a_zero_point": 3, "b_zero_point": -3, "bias": 536870912, "a_multiplier": 1048576, "b_multiplier": 1048576, "shift": 30, "output_zero_point": 0, "output_min": -128, "output_max": 127},
+  {"a_zero_point": 0, "b_zero_point": 0, "bias": 536870912, "a_multiplier": 1048576, "b_multiplier": 1048576, "shift": 30, "output_zero_point": 127, "output_min": -128, "output_max": 127},
+  {"a_zero_point": 1, "b_zero_point": 2, "bias": -2031616, "a_multiplier": 2031616, "b_multiplier": 2048, "shift": 13, "output_zero_point": -7, "output_min": -128, "output_max": 127},
+  {"a_zero_point": 0, "b_zero_point": 0, "bias": 4096, "a_multiplier": 1638400, "b_multiplier": 1638400, "shift": 13, "output_zero_point": 0, "output_min": -128, "output_max": 127},
+  {"a_zero_point": 10, "b_zero_point": -10, "bias": 29360128, "a_multiplier": -1310720, "b_multiplier": 1572864, "shift": 20, "output_zero_point": 5, "output_min": -128, "output_max": 127},
+  {"a_zero_point": -20, "b_zero_point": 30, "bias": -27437722, "a_multiplier": 699051, "b_multiplier": 1398101, "shift": 20, "output_zero_point": 3, "output_min": -100, "output_max": 90},
+  {"a_zero_point": -20, "b_zero_point": 30, "bias": -27437722, "a_multiplier": 699051, "b_multiplier": 1398101, "shift": 20, "output_zero_point": 3, "output_min": 0, "output_max": 0}
+]

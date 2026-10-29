@@ -105,7 +105,7 @@ class PortPackTests(unittest.TestCase):
         # tt-metal is a vendored upstream checkout and paper/ is the manuscript;
         # this check governs portforge's own tree. portforge-cpu.json is the
         # operator's untracked planning export.
-        excluded = {".git", ".venv", "venv", "runs", "assets", "dist", "build",
+        excluded = {".git", ".claude", ".venv", "venv", "runs", "assets", "dist", "build",
                     "__pycache__", "portforge_tt.egg-info", "tt-metal", "paper"}
         skipped_names = {"corpus.json", "README.md", "portforge-cpu.json"}
         for path in support.ROOT.rglob("*"):

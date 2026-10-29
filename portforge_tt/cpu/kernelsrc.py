@@ -44,3 +44,18 @@ def strip_local_xnn_types(text):
     removed += [f"#define {m.group(1)}" for m in XNN_MACRO_SHIM.finditer(text)]
     text = XNN_MACRO_SHIM.sub("", text)
     return text, removed
+
+
+FUNCTION_START = re.compile(r"^(?:static\s+)?void\s+(xnn_\w+)\s*\(", re.M)
+
+
+def extract_function(text, name):
+    """One ukernel's definition out of a source that defines several (upstream
+    generators emit u4/u8/u16 variants into one file); the file's preamble
+    (includes, helpers) is kept so the definition still compiles."""
+    starts = [(m.start(), m.group(1)) for m in FUNCTION_START.finditer(text)]
+    for i, (pos, fn) in enumerate(starts):
+        if fn == name:
+            end = starts[i + 1][0] if i + 1 < len(starts) else len(text)
+            return text[:starts[0][0]] + text[pos:end]
+    raise ValueError(f"{name} is not defined in this source")

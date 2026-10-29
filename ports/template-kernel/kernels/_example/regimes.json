@@ -1,0 +1,15 @@
+{
+  "family": "<family>",
+  "reference": "<scalar reference ukernel>",
+  "bench_shapes": [256, 16320, 130560, 4194304],
+  "reference_cell": "bench@16320",
+  "check_batches": [1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129, 255, 256, 257, 1023, 1024, 4099],
+  "inputs": {"dist": "full"},
+  "regimes": [
+    {"id": "bench", "a": {"scale": 0.5, "zero_point": 1}, "out": {"scale": 0.7, "zero_point": -1},
+     "why": "the library's own bench parameters"}
+  ],
+  "check_extra": [],
+  "heldout": {"count": 3, "sample": {"a.scale": ["loguniform", 0.004, 128.0], "a.zero_point": ["int", -128, 127]},
+              "accept": "1/256 <= a_scale / out_scale <= 128"}
+}

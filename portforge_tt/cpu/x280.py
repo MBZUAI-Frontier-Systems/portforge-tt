@@ -52,6 +52,43 @@ def lease(cfg):
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
+IDLE_SCRIPT = ("cat /proc/loadavg; grep '^cpu[0-9]' /proc/stat; sleep 1; grep '^cpu[0-9]' /proc/stat")
+
+
+def parse_idle(text, max_busy=0.03):
+    """{ok, loadavg, busy: {cpu: fraction}} from IDLE_SCRIPT output.
+
+    Only per-hart busy time over the sampled second decides: the load average
+    lags by minutes, so right after our own session it reads "busy" for nothing.
+    """
+    lines = text.strip().splitlines()
+    load = float(lines[0].split()[0])
+    stats = [l.split() for l in lines[1:]]
+    half = len(stats) // 2
+    busy = {}
+    for before, after in zip(stats[:half], stats[half:]):
+        b, a = list(map(int, before[1:])), list(map(int, after[1:]))
+        total = sum(a) - sum(b)
+        idle = (a[3] + a[4]) - (b[3] + b[4])  # idle + iowait
+        busy[before[0]] = round((total - idle) / total, 4) if total else 0.0
+    return {"ok": all(v <= max_busy for v in busy.values()), "loadavg": load, "busy": busy}
+
+
+def idle(cfg, max_busy=0.03):
+    """Is the shared board quiet enough to time on? Other agents use it too, so
+    timing never starts (or counts) while anything else is running."""
+    proc = run(cfg, IDLE_SCRIPT, timeout=60, check=False)
+    if proc.returncode != 0:
+        return {"ok": False, "error": proc.stderr[-300:]}
+    return parse_idle(proc.stdout, max_busy)
+
+
+def board_id(cfg):
+    """A stable identity for receipts: uarch, hart count and kernel release."""
+    proc = run(cfg, "grep -m1 uarch /proc/cpuinfo; nproc; uname -r", timeout=60, check=False)
+    return " ".join(proc.stdout.split()[2:]) if proc.returncode == 0 else "unknown"
+
+
 def port_open(cfg):
     try:
         with socket.create_connection((cfg.x280.host, cfg.x280.port), timeout=3):

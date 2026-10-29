@@ -1,0 +1,121 @@
+{
+ "family": "x32-transposec",
+ "kind": "transpose",
+ "why": "A transpose takes no params; its speed depends on the block shape and the memory layout of the call. XNNPACK's transpose operator calls the ukernel on 32x32 tiles (transpose_config.x32.tile_size = 32 on RISC-V) with the full matrix strides; XNNPACK's own bench calls it once on a whole dense block. Both are in the matrix, plus sub-tensor views with odd leading dimensions.",
+ "reference": "xnn_x32_transposec_ukernel__2x4_scalar_int",
+ "reference_why": "the scalar kernel XNNPACK falls back to on RISC-V without vectors; the check itself compares with the definition of a transpose",
+ "bench_shapes": [
+  "32x32",
+  "117x117",
+  "256x256",
+  "1024x1024",
+  "1024x32",
+  "32x1024",
+  "7x300"
+ ],
+ "regimes": [
+  {
+   "id": "single",
+   "tile": 0,
+   "in_pad": 0,
+   "out_pad": 0,
+   "offset": 0,
+   "why": "XNNPACK's bench: one ukernel call over the whole dense block"
+  },
+  {
+   "id": "op32",
+   "tile": 32,
+   "in_pad": 0,
+   "out_pad": 0,
+   "offset": 0,
+   "why": "XNNPACK's transpose operator on a dense matrix: 32x32 tiles, full-matrix strides"
+  },
+  {
+   "id": "op32-view",
+   "tile": 32,
+   "in_pad": 3,
+   "out_pad": 5,
+   "offset": 1,
+   "why": "the operator on a sub-tensor view: odd leading dimensions, rows not 64-byte aligned"
+  }
+ ],
+ "check_shapes": {
+  "grid": [
+   1,
+   40
+  ],
+  "extra": [
+   "1x1000",
+   "1000x1",
+   "117x117",
+   "300x7",
+   "7x300",
+   "33x1024",
+   "1024x33",
+   "256x256",
+   "64x65",
+   "65x64"
+  ]
+ },
+ "check_extra": [
+  {
+   "id": "check-tile8",
+   "tile": 8,
+   "in_pad": 1,
+   "out_pad": 0,
+   "offset": 3,
+   "why": "small tiles: many calls with block sizes at and below the kernel's own tile"
+  },
+  {
+   "id": "check-tile40",
+   "tile": 40,
+   "in_pad": 0,
+   "out_pad": 2,
+   "offset": 0,
+   "why": "a tile larger than every upstream kernel's tile and not a power of two"
+  },
+  {
+   "id": "check-single-padded",
+   "tile": 0,
+   "in_pad": 17,
+   "out_pad": 9,
+   "offset": 2,
+   "why": "one call on a padded view: the padding between output rows must stay untouched"
+  }
+ ],
+ "heldout": {
+  "count": 3,
+  "sample": {
+   "tile": [
+    "choice",
+    [
+     0,
+     8,
+     16,
+     24,
+     32,
+     48,
+     64
+    ]
+   ],
+   "in_pad": [
+    "int",
+    0,
+    33
+   ],
+   "out_pad": [
+    "int",
+    0,
+    33
+   ],
+   "offset": [
+    "int",
+    0,
+    15
+   ]
+  }
+ },
+ "reference_cell": "op32@1024x1024",
+ "noise_floor": 0.01,
+ "noise_why": "A/A of identical kernels in one session (2026-10-28, aligned build): worst cell 0.83% (1024x1024, DRAM-bound), others <= 0.55%"
+}

@@ -1,0 +1,42 @@
+{
+ "family": "qs8-vadd-minmax",
+ "why": "Speed and exactness depend on the requantization the init derives from the three quantizations: multipliers in [0, 2^21], shift in [13, 30] (scale ratio in [2^-10, 2^8)), bias folding both zero points and the rounding constant. XNNPACK's bench uses scale 1 / zero point 0 everywhere (am = bm = 2^20, shift 20), which a parameter-specific kernel could special-case; the matrix covers the real envelope.",
+ "reference": "xnn_qs8_vadd_minmax_ukernel__scalar_u4",
+ "bench_shapes": [256, 16320, 130560, 4194304],
+ "reference_cell": "gtest@16320",
+ "check_batches": [1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129, 255, 256, 257, 511, 512, 513, 1023, 1024, 1025, 4099],
+ "inputs": {"dist": "full"},
+ "regimes": [
+  {"id": "bench", "a": {"scale": 1.0, "zero_point": 0}, "b": {"scale": 1.0, "zero_point": 0}, "out": {"scale": 1.0, "zero_point": 0},
+   "why": "XNNPACK's vbinary bench: am = bm = 2^20, shift 20, bias 2^19 (y = sat8(a + b))"},
+  {"id": "gtest", "a": {"scale": 0.75, "zero_point": -7}, "b": {"scale": 1.25, "zero_point": -1}, "out": {"scale": 0.96875, "zero_point": 5},
+   "why": "the gtest tester's scales; odd multipliers (am != bm), shift 20"},
+  {"id": "residual", "a": {"scale": 0.0235, "zero_point": 3}, "b": {"scale": 0.0235, "zero_point": -11}, "out": {"scale": 0.0235, "zero_point": 9},
+   "why": "residual add with one quantization for all three (common in real models): am = bm = 2^20"},
+  {"id": "same-ab", "a": {"scale": 0.05, "zero_point": 3}, "b": {"scale": 0.05, "zero_point": -4}, "out": {"scale": 0.0731, "zero_point": 10},
+   "why": "equal input scales, different output: am = bm, not a power of two"},
+  {"id": "mixed", "a": {"scale": 0.0123, "zero_point": -20}, "b": {"scale": 0.0457, "zero_point": 17}, "out": {"scale": 0.0311, "zero_point": -3},
+   "why": "typical unrelated scales: both multipliers odd"},
+  {"id": "shift30", "a": {"scale": 0.001, "zero_point": 100}, "b": {"scale": 0.00099, "zero_point": -100}, "out": {"scale": 1.0, "zero_point": 127},
+   "why": "ratio near 2^-10: shift 30, the init's maximum (SALTyRN's kernel overflows here)"},
+  {"id": "shift13", "a": {"scale": 255.0, "zero_point": -128}, "b": {"scale": 1.0, "zero_point": 127}, "out": {"scale": 1.0, "zero_point": -128},
+   "why": "ratio just under 2^8: shift 13, the smallest the init allows; zero points at the extremes"},
+  {"id": "b-dominant", "a": {"scale": 0.0001, "zero_point": 0}, "b": {"scale": 1.0, "zero_point": 5}, "out": {"scale": 1.0, "zero_point": -5},
+   "why": "one tiny multiplier (am about 105), the other near 2^20"}
+ ],
+ "check_extra": [
+  {"id": "zp-extremes", "a": {"scale": 0.5, "zero_point": -128}, "b": {"scale": 0.5, "zero_point": -128}, "out": {"scale": 0.25, "zero_point": 127}},
+  {"id": "half", "a": {"scale": 0.5, "zero_point": 0}, "b": {"scale": 0.5, "zero_point": 0}, "out": {"scale": 1.0, "zero_point": 0}},
+  {"id": "ratio-min", "a": {"scale": 0.0009766, "zero_point": -1}, "b": {"scale": 0.0009766, "zero_point": 1}, "out": {"scale": 1.0, "zero_point": 0}},
+  {"id": "neg-a", "a": {"scale": -0.4, "zero_point": 2}, "b": {"scale": 0.3, "zero_point": -2}, "out": {"scale": 0.5, "zero_point": 1},
+   "why": "the init accepts a negative scale (sign goes into the multiplier); correctness only"}
+ ],
+ "heldout": {
+  "count": 4,
+  "sample": {"a.scale": ["loguniform", 0.001, 200.0], "a.zero_point": ["int", -128, 127],
+             "b.scale": ["loguniform", 0.001, 200.0], "b.zero_point": ["int", -128, 127],
+             "out.scale": ["loguniform", 0.01, 10.0], "out.zero_point": ["int", -128, 127]},
+  "accept": "0.0009766 <= a_scale / out_scale < 255 and 0.0009766 <= b_scale / out_scale < 255"
+ },
+ "noise_floor": 0.005
+}
