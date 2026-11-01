@@ -91,7 +91,7 @@ class RunnerTests(unittest.TestCase):
             root = Path(directory)
             config = self.config(root)
             runner.configure(config)
-            args = runner.sandbox(root, root / 'job', '0000:02:00.0', '7', 'parakeet')
+            args = runner.sandbox(root, root / 'job', ['0000:02:00.0'], ['7'], 'parakeet')
             self.assertEqual(runner.WEIGHTS_BY_MODEL['parakeet'], Path('/models/parakeet/model.safetensors'))
             index = args.index('/deployment/python')
             self.assertEqual(args[index - 1], '--ro-bind')
@@ -109,7 +109,7 @@ class RunnerTests(unittest.TestCase):
             config = self.config(root)
             config['metal'] = str(metal)
             runner.configure(config)
-            args = runner.sandbox(root, root / 'job', '0000:02:00.0', '7', 'parakeet')
+            args = runner.sandbox(root, root / 'job', ['0000:02:00.0'], ['7'], 'parakeet')
             for alias in (str(metal), '/opt/tt-metal'):
                 index = args.index(alias + '/.git')
                 self.assertEqual(args[index - 2:index], ['--ro-bind', '/dev/null'])
@@ -151,7 +151,7 @@ class RunnerTests(unittest.TestCase):
             (checkpoint / spec['weight_files'][0]).symlink_to(cached)
             (checkpoint / 'earlier-private-backend.py').write_text('private')
             runner.configure({**self.config(root), 'weights_by_model': {'parakeet': str(checkpoint)}})
-            args = runner.sandbox(root, root / 'job', '0000:02:00.0', '7', 'parakeet')
+            args = runner.sandbox(root, root / 'job', ['0000:02:00.0'], ['7'], 'parakeet')
             self.assertEqual(runner.checkpoint('parakeet'), (checkpoint, '/weights'))
             self.assertNotIn(str(checkpoint), args)
             self.assertNotIn(str(checkpoint / 'earlier-private-backend.py'), args)
@@ -571,6 +571,79 @@ class RunnerTests(unittest.TestCase):
             mark.assert_called_once_with('0000:02:00.0', 'quarantined', 'memory-limit')
             self.assertEqual(json.loads((root / 'jobs/memory-limit/result.json').read_text()), result)
             self.assertFalse(result['timeout'])
+
+    def mesh_fixture(self, root, mesh_cards=4):
+        (root / 'harness').mkdir()
+        (root / 'harness/runtime.json').write_text(json.dumps(self.config(root)))
+        public = root / 'references/parakeet/mesh/input'
+        public.mkdir(parents=True)
+        (public / 'suite.json').write_text(json.dumps({'model_key': 'parakeet', 'stage': 'mesh', 'mesh_cards': mesh_cards}))
+        return {'model': 'parakeet', 'kind': 'evaluate', 'stage': 'mesh', 'job': 'mesh', 'precision': 'bf16'}
+
+    def test_mesh_evaluation_leases_binds_and_quarantines_every_card(self):
+        found = {'0000:02:00.0': '0', '0000:03:00.0': '1', '0000:04:00.0': '2', '0000:05:00.0': '3'}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            request = self.mesh_fixture(root)
+            captured = []
+            def execute(args, job, *unused):
+                for filename in ('stdout.log', 'stderr.log'):
+                    (job / filename).write_text('')
+                captured.append(args)
+                return {'returncode': 124, 'timeout': True}
+            with patch.object(runner, 'cards', return_value=found), \
+                 patch.object(runner, 'health', return_value={'state': 'healthy'}), \
+                 patch.object(runner, 'execute', side_effect=execute), patch.object(runner, 'mark') as mark:
+                result = runner.main(root, request)
+            args = captured[0]
+            binds = [args[i + 1] for i, a in enumerate(args) if a == '--dev-bind']
+            self.assertEqual(binds, ['/dev/tenstorrent/' + n for n in '0123'])
+            self.assertEqual(args[args.index('TT_VISIBLE_DEVICES') + 1], ','.join(found))
+            self.assertEqual(result['pcis'], list(found))
+            self.assertEqual([c.args[0] for c in mark.call_args_list], list(found))
+            self.assertTrue(all(c.args[1] == 'quarantined' for c in mark.call_args_list))
+
+    def test_mesh_run_leases_the_requested_cards_and_plain_runs_one(self):
+        found = {'0000:02:00.0': '0', '0000:03:00.0': '1', '0000:04:00.0': '2', '0000:05:00.0': '3'}
+        for extra, binds in (({'mesh_cards': 4}, 4), ({}, 1)):
+            with tempfile.TemporaryDirectory() as directory, self.subTest(extra=extra):
+                root = Path(directory)
+                (root / 'harness').mkdir()
+                (root / 'harness/runtime.json').write_text(json.dumps(self.config(root)))
+                captured = []
+                def execute(args, job, *unused):
+                    for filename in ('stdout.log', 'stderr.log'):
+                        (job / filename).write_text('')
+                    captured.append(args)
+                    return {'returncode': 0, 'timeout': False}
+                with patch.object(runner, 'cards', return_value=found), \
+                     patch.object(runner, 'health', return_value={'state': 'healthy'}), \
+                     patch.object(runner, 'execute', side_effect=execute):
+                    runner.main(root, {'model': 'parakeet', 'kind': 'run', 'job': 'r', 'command': 'true', **extra})
+                self.assertEqual(captured[0].count('--dev-bind'), binds)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'harness').mkdir()
+            (root / 'harness/runtime.json').write_text(json.dumps(self.config(root)))
+            with self.assertRaises(ValueError):
+                runner.main(root, {'model': 'parakeet', 'kind': 'run', 'job': 'r', 'command': 'true', 'mesh_cards': 1})
+
+    def test_mesh_evaluation_needs_enough_healthy_cards_and_a_valid_suite(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            request = self.mesh_fixture(root)
+            with patch.object(runner, 'cards', return_value={'0000:02:00.0': '0', '0000:03:00.0': '1'}), \
+                 patch.object(runner, 'health', return_value={'state': 'healthy'}), \
+                 patch.object(runner, 'execute') as execute:
+                result = runner.main(root, request)
+            execute.assert_not_called()
+            self.assertEqual(result['failure'], 'no_healthy_or_free_card')
+        for cards in (1, 9, '4'):
+            with tempfile.TemporaryDirectory() as directory, self.subTest(cards=cards):
+                root = Path(directory)
+                request = self.mesh_fixture(root, cards)
+                with self.assertRaises(ValueError):
+                    runner.main(root, request)
 
     def test_paths_cannot_escape_workspace(self):
         with tempfile.TemporaryDirectory() as root:

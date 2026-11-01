@@ -7,7 +7,7 @@ matched same-precision comparisons; consider relevant supported precision tradeo
 baseline artifacts, evaluated candidate outcomes and remaining time. Final full-corpus submission
 freezes further edits and may be expensive; prefer it after optimization and packaging evidence is
 recorded. An early full baseline validation needs an explicit reason. After bringup, steer by the
-observation's optimization block: it holds the trusted frontier (perf-stage receipts ranked by the
+observation's optimization block: it holds the trusted frontiers (perf, and mesh when the pack has it; receipts ranked by the
 campaign objective), contextual rejections and an offered menu per beam parent. Pick one beam
 parent and one offered technique (or a novel TT-specific transform backed by port_profile
 evidence), and name both in the instruction. A rejection binds only to its parent and combination. No arbitrary speedup

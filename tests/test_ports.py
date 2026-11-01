@@ -49,19 +49,23 @@ class PortPackTests(unittest.TestCase):
             "import portforge_models; portforge_models.use_registry(sys.argv[1] + '/models.json')\n"
             "import evaluate, portforge_eval\n"
             "corpus = json.load(open(sys.argv[3]))\n"
-            "for stage in ('smoke', 'bringup', 'perf', 'full'):\n"
+            "for stage in sys.argv[4].split(','):\n"
             "    spec, _ = evaluate.make_suite(corpus, stage)\n"
             "    portforge_eval.check_suite(spec)\n"
-            "    print(stage, len(spec['cases']))\n")
+            "    print(stage, len(spec['cases']), spec.get('mesh_cards'))\n")
         for pack in REAL:
             loaded = port.load_port(pack)
             if not loaded["corpus_path"]:
                 continue
+            stages = ["smoke", "bringup", "perf"] + (["mesh"] if loaded["mesh_cards"] else []) + ["full"]
             with self.subTest(pack=pack.name):
-                done = subprocess.run([sys.executable, "-c", script, str(pack), str(HARNESS), str(loaded["corpus_path"])],
-                                      capture_output=True, text=True)
+                done = subprocess.run([sys.executable, "-c", script, str(pack), str(HARNESS / "remote"), str(loaded["corpus_path"]),
+                                       ",".join(stages)], capture_output=True, text=True)
                 self.assertEqual(done.returncode, 0, done.stderr)
-                self.assertEqual([line.split()[0] for line in done.stdout.split("\n") if line], ["smoke", "bringup", "perf", "full"])
+                lines = [line.split() for line in done.stdout.split("\n") if line]
+                self.assertEqual([line[0] for line in lines], stages)
+                self.assertEqual([line[2] for line in lines],
+                                 [str(loaded["mesh_cards"]) if s == "mesh" else "None" for s in stages])
     def test_check_suite_rejects_consistency_cases_without_a_target(self):
         from portforge_eval import check_suite
         spec = {"stage": "full", "cases": [{"name": "batch4", "clips": ["a", "b"]},
@@ -75,13 +79,14 @@ class PortPackTests(unittest.TestCase):
     def test_every_evaluator_upload_ships_the_shared_module(self):
         # evaluate.py imports portforge_eval; any site that uploads one must upload both.
         import ast
-        source = (HARNESS / "portforge_loop.py").read_text()
-        for node in ast.walk(ast.parse(source)):
-            if isinstance(node, ast.Tuple) and all(isinstance(e, ast.Constant) for e in node.elts):
-                names = {e.value for e in node.elts}
-                if "evaluate.py" in names and "portforge_models.py" in names:
-                    self.assertIn("portforge_eval.py", names, ast.get_source_segment(source, node))
-        self.assertIn("'/portforge_eval.py'", (HARNESS / "runner.py").read_text())
+        for module in HARNESS.rglob("*.py"):
+            source = module.read_text()
+            for node in ast.walk(ast.parse(source)):
+                if isinstance(node, ast.Tuple) and all(isinstance(e, ast.Constant) for e in node.elts):
+                    names = {e.value for e in node.elts}
+                    if "evaluate.py" in names and "portforge_models.py" in names:
+                        self.assertIn("portforge_eval.py", names, ast.get_source_segment(source, node))
+        self.assertIn("'/portforge_eval.py'", (HARNESS / "remote/runner.py").read_text())
 
     def test_agent_documents_use_the_shared_tool_names(self):
         stale = re.compile(r"\b(?:nllb|chronos|esm2?|parakeet)_(files|read|write|run|evaluate|status|log|submit)\b")

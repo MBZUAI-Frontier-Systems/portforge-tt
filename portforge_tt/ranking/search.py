@@ -5,7 +5,7 @@ stage, and whether it passed always comes from the run's job receipts. What the
 source *is* comes from the worker's TRANSFORMS.json inside that source:
 
     {"parent": "<code_sha256 of the node it was derived from, or null>",
-     "applied": ["bfp8-weights", "matmul-2d-mcast-fuse-batch"],   # optimizations.json ids
+     "applied": ["bfp8-weights", "matmul-2d-mcast-fuse-batch"],   # ids from guides/TT_OPTIMIZATIONS.md
      "novel": "free text for a transform outside the catalogue (optional)",
      "note": "one line"}
 
@@ -19,20 +19,30 @@ untried (parent, technique) pairs (Autocomp-style diversity).
 import json
 from pathlib import Path
 import random
+import re
 
 if __package__:
     from . import objective
+    from ..remote.portforge_eval import GATED_STAGES
 else:
     import objective
+    from portforge_eval import GATED_STAGES
 
 TRANSFORMS_FILE = 'TRANSFORMS.json'
-CATALOGUE = Path(__file__).resolve().parent / 'guides' / 'optimizations.json'
-GATED_STAGES = ('smoke', 'bringup', 'perf')
+HERE = Path(__file__).resolve().parent
+CATALOGUE = (HERE if (HERE / 'guides').is_dir() else HERE.parent) / 'guides' / 'TT_OPTIMIZATIONS.md'
 
 
 def catalogue(path=CATALOGUE):
-    data = json.loads(Path(path).read_text())
-    return {t['id']: t for t in data['techniques']}
+    """Techniques from the catalogue guide: `## <category>: ...` sections hold `### \\`<id>\\` — <title>` entries."""
+    found, category = {}, None
+    for line in Path(path).read_text().splitlines():
+        if line.startswith('## '):
+            category = line[3:].split(':', 1)[0].strip() if ':' in line else None
+        entry = re.match(r'### `([^`]+)` — (.+)', line)
+        if entry and category:
+            found[entry.group(1)] = dict(id=entry.group(1), category=category, title=entry.group(2).strip())
+    return found
 
 
 def declared(files, known_ids):
@@ -139,7 +149,7 @@ def tried(nodes):
 def summary(nodes, chosen, known, seed=0, mask=.7, beam=4, limit=12):
     """Bounded supervisor view: frontier, contextual rejections and a masked untried menu."""
     pairs = tried(nodes)
-    fronts = frontier(nodes, chosen, 'perf') or frontier(nodes, chosen, 'bringup')
+    fronts = (frontier(nodes, chosen, 'perf') + frontier(nodes, chosen, 'mesh')) or frontier(nodes, chosen, 'bringup')
     beam_ids = []
     for front in fronts:
         beam_ids += [i for i in front['frontier'] if i not in beam_ids]
@@ -174,4 +184,5 @@ def write(run, nodes, chosen, known):
     folder.mkdir(parents=True, exist_ok=True)
     (folder / 'nodes.jsonl').write_text(''.join(json.dumps(n, sort_keys=True) + '\n' for n in nodes))
     (folder / 'frontier.json').write_text(json.dumps(
-        dict(perf=frontier(nodes, chosen, 'perf'), bringup=frontier(nodes, chosen, 'bringup')), indent=2))
+        dict(perf=frontier(nodes, chosen, 'perf'), mesh=frontier(nodes, chosen, 'mesh'),
+             bringup=frontier(nodes, chosen, 'bringup')), indent=2))

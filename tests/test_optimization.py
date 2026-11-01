@@ -1,15 +1,15 @@
-"""Objective ranking, search tree, telemetry, profile parsing and mergeability without hardware."""
+"""Objective ranking, search tree, telemetry and profile parsing without hardware."""
 import support  # noqa: F401  (pack and registry setup)
 import csv
 import io
 import json
+import re
 import os
 from pathlib import Path
 import tempfile
 import time
 import unittest
 
-import merge_check
 import objective
 import opprofile
 import portforge_eval
@@ -155,6 +155,13 @@ class TelemetryTests(unittest.TestCase):
             sampler = telemetry.PowerSampler(sensor, interval=.01).start()
             time.sleep(.05)
             self.assertTrue(all(w == 150.0 for _, w in sampler.stop()))
+            second = root / 'hwmon' / 'hwmon4'
+            second.mkdir()
+            (second / 'power1_input').write_text('50000000\n')
+            self.assertEqual(telemetry.read_watts([sensor, second]), 200.0)  # a mesh job: summed board power
+            sampler = telemetry.PowerSampler([sensor, second], interval=.01).start()
+            time.sleep(.05)
+            self.assertTrue(all(w == 200.0 for _, w in sampler.stop()))
         samples = [(t, 100.0) for t in range(0, 31)]
         measurements = dict(cases=[dict(name='a', window=[5.0, 25.0], items=4, seconds=[.1] * 200),
                                    dict(name='short', window=[1.0, 3.0], items=1, seconds=[.1] * 20),
@@ -226,38 +233,6 @@ class ProfileTests(unittest.TestCase):
             opprofile.rows_between(self.csv_rows(), 'nope', 'portforge_timed_stop')
 
 
-class MergeabilityTests(unittest.TestCase):
-    GOOD = {
-        'models/experimental/m/tt/model.py': '# SPDX-License-Identifier: Apache-2.0\nimport ttnn\n',
-        'models/experimental/m/tests/test_model.py': ('# SPDX-License-Identifier: Apache-2.0\n'
-                                                      'def test_logits(device):\n    assert True\n'),
-        'models/experimental/m/tests/test_e2e.py': ('# SPDX-License-Identifier: Apache-2.0\n'
-                                                    'def test_e2e(device, model_location):\n    assert True\n'),
-        'models/experimental/m/demo/demo.py': '# SPDX-License-Identifier: Apache-2.0\nprint(1)\n',
-        'models/experimental/m/README.md': '| batch | seq | latency (ms) |\n|---|---|---|\n| 1 | 512 | 6.8 |\n',
-        'backend.py': 'WEIGHTS = "/weights"\n',   # sandbox adapter outside the package is fine
-    }
-
-    def test_good_package_passes(self):
-        verdict = merge_check.check(self.GOOD)
-        self.assertTrue(verdict['passed'], verdict['issues'])
-        self.assertEqual(verdict['package_root'], 'models/experimental/m')
-
-    def test_reviewer_objections_are_reported(self):
-        bad = dict(self.GOOD)
-        bad['models/experimental/m/tests/test_model.py'] = ('# SPDX-License-Identifier: Apache-2.0\nimport backend\n'
-                                                           'import ttnn\nd = ttnn.open_device(device_id=0)\n'
-                                                           'def test_logits():\n    print(1)\n')
-        bad['models/experimental/m/tt/model.py'] = 'path = "/weights/model.safetensors"\n'
-        bad['models/experimental/m/README.md'] = '# Model\n'
-        del bad['models/experimental/m/tests/test_e2e.py']
-        issues = ' '.join(merge_check.check(bad)['issues'])
-        for expected in ('never assert', 'sandbox-only', 'own device', 'device fixture', 'end-to-end',
-                         'hard-coded sandbox path /weights', 'SPDX', 'performance table'):
-            self.assertIn(expected, issues)
-        self.assertFalse(merge_check.check({'backend.py': ''})['passed'])
-
-
 class EvaluatorHelperTests(unittest.TestCase):
     def test_repeat_schedule_matches_range_without_perf_fields(self):
         spec = dict(timed_repeats=3)
@@ -295,6 +270,28 @@ class EvaluatorHelperTests(unittest.TestCase):
                                       items_per_second=100.0)])
         with self.assertRaises(ValueError):
             portforge_eval.latency_summary([0.0])
+
+    def test_large_sweep_batches_are_throughput_points_not_latency(self):
+        checks = [dict(name='batch', seconds=[.002] * 3, first_seconds=1.),
+                  dict(name='sweep-b4', seconds=[.004] * 3, first_seconds=1.),
+                  dict(name='sweep-b1024', seconds=[.2] * 3, first_seconds=9.)]
+        cases = [dict(name='batch'), dict(name='sweep-b4', batch=4), dict(name='sweep-b1024', batch=1024)]
+        latency = portforge_eval.verdict_latency(checks, cases)
+        self.assertEqual((latency['median_case_p50_seconds'], latency['max_case_p99_seconds']), (.003, .004))
+        self.assertEqual((latency['measured_cases'], latency['latency_max_batch'], latency['max_first_seconds']), (2, 4, 1.))
+        self.assertEqual(checks[2]['p50_seconds'], .2)  # still summarized for the scaling curve
+        curve = portforge_eval.scaling_curve(checks, cases)
+        self.assertEqual([round(row['items_per_second']) for row in curve], [1000, 5120])
+
+    def test_mesh_stage_and_only_it_names_its_card_count(self):
+        good = dict(stage='mesh', mesh_cards=4, cases=[])
+        self.assertIs(portforge_eval.check_suite(good), good)
+        for bad in (dict(stage='mesh', cases=[]), dict(stage='perf', mesh_cards=4, cases=[]),
+                    dict(stage='mesh', mesh_cards=1, cases=[]), dict(stage='mesh', mesh_cards='4', cases=[])):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                portforge_eval.check_suite(bad)
+        self.assertEqual(portforge_eval.stage_repeats('mesh'), portforge_eval.stage_repeats('perf'))
+        self.assertEqual(portforge_eval.perf_fields('mesh'), portforge_eval.perf_fields('perf'))
 
     def test_timed_window_records_wall_clock(self):
         window = portforge_eval.TimedWindow(3)
@@ -397,18 +394,18 @@ class HostComputeGuardTests(unittest.TestCase):
 
 
 class CatalogueTests(unittest.TestCase):
-    def test_catalogue_is_consistent_with_its_guide(self):
-        data = json.loads((support.HARNESS / 'guides/optimizations.json').read_text())
-        ids = [t['id'] for t in data['techniques']]
-        self.assertEqual(len(ids), len(set(ids)))
+    def test_catalogue_parses_from_its_guide(self):
         guide = (support.HARNESS / 'guides/TT_OPTIMIZATIONS.md').read_text()
-        for technique in data['techniques']:
+        known = search.catalogue()
+        self.assertEqual(len(known), guide.count('\n### `'))  # every entry parsed, ids unique
+        self.assertEqual({t['category'] for t in known.values()},
+                         {'dispatch', 'grid', 'memory', 'numerics', 'fusion', 'kernel', 'scaleout'})
+        for technique in known.values():
             with self.subTest(id=technique['id']):
-                self.assertIn(technique['category'], data['categories'])
-                self.assertTrue(set(technique['interactions']) <= set(ids))
-                self.assertIn('### `%s`' % technique['id'], guide)
-                for field in ('title', 'mechanism', 'helps_when', 'risk', 'exemplar', 'source'):
-                    self.assertTrue(technique[field])
+                self.assertTrue(technique['title'])
+        # every "Combine/conflict with" link names a catalogued technique
+        for link in re.findall(r'\*\*Combine/conflict with:\*\* (.+)', guide):
+            self.assertTrue(set(re.findall(r'`([^`]+)`', link)) <= set(known), link)
 
 
 if __name__ == '__main__':

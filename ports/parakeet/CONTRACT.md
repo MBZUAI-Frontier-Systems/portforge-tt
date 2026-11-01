@@ -37,7 +37,9 @@ not part of the pinned manifest. Load the pinned safetensors with
 `torch.load(..., map_location="cpu", weights_only=True)` or the safetensors
 reader; CPU weight conversion is allowed.
 Optional `DEVICE_OPTIONS`: `trace_region_size` 0–128 MiB, `l1_small_size`
-0–128 KiB, `num_hw_cqs` 1–2.
+0–128 KiB, `num_command_queues` 1–2.
+During calls, PyTorch learned ops on the host CPU are rejected; host matmuls
+pass only when no operand carries model weights (e.g. RoPE angles from positions).
 
 Evaluation selects `bf16` (default), `fp32`, `fp16`, or `bfp8_b` explicitly
 and passes it to the factory. Declare actual dominant weight/activation

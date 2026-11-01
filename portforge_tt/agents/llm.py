@@ -3,7 +3,7 @@
 Ported from ``chia.base.llm_call`` (Copyright (c) 2026 The Regents of the
 University of California; BSD-3-Clause, see LICENSE), minus the Ray/ChiaTool typing: tool servers are
 now any object carrying ``name``, ``hostname`` and ``port`` (see
-``mcpserver.ToolServer``).
+``tools.ToolServer``).
 """
 from __future__ import annotations
 

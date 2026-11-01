@@ -4,10 +4,10 @@ import sys
 from pathlib import Path
 
 PACK = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(PACK), str(PACK.parents[1] / "portforge_tt")]
-import models  # noqa: E402
+sys.path[:0] = [str(PACK), str(PACK.parents[1] / "portforge_tt" / "remote")]
+import portforge_models  # noqa: E402
 
-models.use_registry(PACK / "models.json")
+portforge_models.use_registry(PACK / "models.json")
 
 
 def shipped_corpus(test):
@@ -68,13 +68,13 @@ class PrecisionTests(unittest.TestCase):
             evaluate.validate_precision("bf16", None)
 
     def test_execution_modes(self):
-        with patch("evaluate.socket.gethostname", return_value="dedicated-gpu"), patch.dict(os.environ, {}, clear=True):
+        with patch("socket.gethostname", return_value="dedicated-gpu"), patch.dict(os.environ, {}, clear=True):
             with self.assertRaises(RuntimeError):
                 evaluate.reference_execution()
             with patch.dict(os.environ, {"PORTFORGE_REFERENCE_EXECUTION": "direct"}):
                 self.assertEqual(evaluate.reference_execution(), "direct")
         with patch.dict(os.environ, {"PORTFORGE_REFERENCE_EXECUTION": "direct"}), \
-             patch("evaluate.socket.gethostname", return_value="login-node"), self.assertRaises(RuntimeError):
+             patch("socket.gethostname", return_value="login-node"), self.assertRaises(RuntimeError):
             evaluate.reference_execution()
 
 

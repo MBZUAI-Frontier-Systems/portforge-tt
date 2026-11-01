@@ -1,38 +1,31 @@
 # portforge-tt
 
-Autonomously ports pretrained ML models to Tenstorrent hardware with TTNN. 
-
-A supervisor agent picks one bounded piece of work per turn, a worker agent writes the backend and runs jobs on a TT card through a few MCP tools, and a trusted evaluator checks every candidate against an independent FP32 reference. The held-out corpus runs once, at the end, after the source is frozen.
-
-The model-specific half lives in the pack; the loop, evaluator, sandbox and guides are shared. Targets Blackhole with TT-Metal, but the structure is not TT-specific.
-
-## Install
-
-Python 3.10+ and an agent CLI logged in (opencode by default; claude and codex also work):
-
-```sh
-git clone https://github.com/murodbecks/portforge-tt
-cd portforge-tt
-pip install -e .
-python -m pytest tests/ -q        # shared harness; no hardware needed
-python -m unittest discover -s ports/chronos2/tests    # one pack's evaluator
-```
+Agents port pretrained models to Tenstorrent hardware with TTNN. A supervisor plans one step per turn, a worker writes the backend and runs sandboxed jobs on TT cards, and a trusted evaluator checks every candidate against an FP32 reference. The held-out corpus runs once, on frozen source. Among passing candidates, a perf stage (latency, throughput, board energy) ranks them on a Pareto front.
 
 ## Run
 
-You need a TT host (built TT-Metal checkout, `ttnn` + `torch`, `bwrap`, the checkpoint) and a reference host for the FP32 oracle (a GPU is preferred), both reachable over SSH. Copy `cluster.yaml`, fill in the placeholders, then:
-
 ```sh
+pip install -e .
+python -m pytest tests -q                         # no hardware needed
 portforge --port ports/chronos2 --cluster my-cluster.yaml --hours 6 --detach
 ```
 
-Accuracy gates are hard; among passing candidates the controller ranks on a `perf` stage (latency percentiles, a batch scaling curve, board energy from the card's power sensor) by Pareto front, or by `--optimize <metric>` with `--constraint` bounds. Agents search combinations of the TT techniques in `portforge_tt/guides/TT_OPTIMIZATIONS.md`, profile with Tracy through `port_profile`, and record what each source applies in `TRANSFORMS.json`; `python -m portforge_tt.report runs/<run>` prints the ranked candidates.
+You need a TT host (TT-Metal, `bwrap`, the checkpoint) and a GPU host for the FP32 oracle, both over SSH; copy `cluster.yaml` and fill it in. Progress is in `runs/<run>/status.json`; `python -m portforge_tt.ranking.report runs/<run>` ranks the candidates. `--resume runs/<run>` continues a campaign, `--agent claude|codex|opencode` picks the agent. `AGENTS.md` covers adding a model.
 
-Everything lands under `runs/<run>/`: status, agent turns, job receipts, the search tree (`search/`), and the frozen harness the campaign is graded by. `--resume` continues a campaign on any backend (`--agent opencode|claude|codex`). Agents get no shell or write access on the controller; TT jobs run sandboxed, on leased cards. `AGENTS.md` covers adding a model and setting up machines.
+## Layout
+
+| Path | What |
+|---|---|
+| `ports/<model>/` | a pack: pinned model, corpus, evaluator, agent contract (start from `ports/template/`) |
+| `portforge_tt/control/` | the campaign: run creation, the loop, the agents' tools, jobs |
+| `portforge_tt/ranking/` | objective, search tree, report |
+| `portforge_tt/remote/` | what runs on the TT and GPU hosts: sandbox runner, telemetry, the evaluator kit |
+| `portforge_tt/agents/` | opencode, Claude Code and Codex wrappers |
+| `portforge_tt/guides/`, `prompts/` | what the agents read |
 
 ## Results
 
-Blackhole p150, tt-metal `fd80faa3`, FP32 references on an A100:
+Blackhole p150, FP32 references on an A100:
 
 | pack | smoke | bringup | full | tt-metal PR |
 |---|---|---|---|---|
@@ -41,19 +34,10 @@ Blackhole p150, tt-metal `fd80faa3`, FP32 references on an A100:
 | esm2 (bf16) | PASS (NRMSE 0.030) | FAIL 4/8 | not run | [#57833](https://github.com/tenstorrent/tt-metal/pull/57833) |
 | parakeet (bf16) | PASS (NRMSE 0.018) | PASS 8/8 (NRMSE 0.033) | 18/20 | [#57845](https://github.com/tenstorrent/tt-metal/pull/57845) |
 
-Full-corpus misses are bf16 near-tie logits; each pack's `CONTRACT.md` has the device evidence and the rejected fp32/mixed-precision variants. Chronos-2 and ESM-2 ship their corpora in the pack; the NLLB and Parakeet corpora rebuild from the provenance in `ports/<name>/SOURCES.md`. Runs archived before the CHIA-free rewrite are inspectable but not resumable.
-
 ## Paper
 
-**PortForge-TT: Enabling Agentic Cross-Platform Model Adaptation using CHIA**
-Abror Shopulatov, Dongning Ma, Abdulrahman Mahmoud (MBZUAI).
-A³ Workshop (Agentic Approaches to Architecture) @ MICRO 2026.
-
-Preprint coming soon; the link will appear here.
+**PortForge-TT: Enabling Agentic Cross-Platform Model Adaptation using CHIA.** Abror Shopulatov, Dongning Ma, Abdulrahman Mahmoud (MBZUAI). A³ Workshop @ MICRO 2026. Preprint coming soon.
 
 ## License
 
-BSD-3-Clause, see [LICENSE](LICENSE). The agent CLI wrappers, error taxonomy
-and MCP server base were adapted from
-[CHIA](https://github.com/ucb-bar/chia); those files keep the upstream
-copyright headers.
+BSD-3-Clause ([LICENSE](LICENSE)). The agent wrappers and MCP server base are adapted from [CHIA](https://github.com/ucb-bar/chia) and keep their upstream headers.

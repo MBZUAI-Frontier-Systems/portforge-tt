@@ -15,6 +15,18 @@ the input data and an optional `label`), and `selection` naming the clips used
 by each stage (`smoke`, `bringup`, `full`). Its identity is the SHA-256 of its
 canonical JSON; pin that in `port.json` and `evaluate.py`.
 
+The `perf` stage reuses the bringup selection plus a batch sweep of the smoke
+item, so it needs no extra corpus entries.
+
+Add a `robustness` selection for inputs that real use will produce but the
+bringup set does not stress: out-of-distribution data, added noise, the
+longest envelope inputs, extreme and constant values, empty or all-padding
+rows. Mix input distributions and generate synthetic ones from recorded seeds
+(KernelBench-Verified found single-distribution suites overstate kernels).
+These cases are gated like the others (finite outputs, oracle NRMSE, task
+metric within its bound) and belong to the held-out side unless a case is
+deliberately public.
+
 ## Gates and why
 
 TODO: each gate in `GATES`, what it protects against, and why the threshold is

@@ -1,4 +1,4 @@
-"""Local job runtime: named-resource leases and background execution.
+"""Local job runtime: named-resource leases, background execution and the event log.
 
 This replaces the CHIA/Ray dispatch layer PortForge was originally built on.
 Jobs are plain functions; ``@job`` declares the named resources (remote
@@ -13,18 +13,21 @@ and ``result.json``), so a controller restart loses nothing a future would
 have held: futures are an in-process convenience, not storage. Resources are
 acquired in sorted-name order, which keeps concurrent multi-resource jobs
 deadlock-free without a central scheduler.
+
+The controller and the jobs append typed events with UTC timestamps to
+``runs/<run>/trace/events.jsonl`` while a trace is open (``trace``/``event``/
+``end_trace``). Events are advisory diagnostics; job truth stays in each job's files.
 """
 from __future__ import annotations
 
 import functools
+from datetime import datetime, timezone
+import json
+import os
+from pathlib import Path
 import threading
 import time
 from concurrent.futures import Future
-
-if __package__:  # installed as part of the portforge_tt package
-    from . import tracer
-else:  # flat: a frozen run harness or a direct script execution
-    import tracer
 
 _RESOURCES: dict[str, threading.BoundedSemaphore] = {}
 _THREADS: list[threading.Thread] = []
@@ -69,11 +72,6 @@ class _Leases:
         for name in reversed(self.held):
             _semaphore(name).release()
         return False
-
-
-def leases(**resources):
-    """Acquire named resource units directly (``with leases(tt=1): ...``)."""
-    return _Leases(resources)
 
 
 def get(future):
@@ -136,17 +134,50 @@ class _Job:
             if not future.set_running_or_notify_cancel():
                 return
             started = time.monotonic()
-            tracer.event("job.leased", job=name, resources=self.resources)
+            event("job.leased", job=name, resources=self.resources)
             try:
                 with _Leases(self.resources):
                     future.set_result(self.fn(*args, **kwargs))
             except BaseException as exception:  # surfaced to the caller by get()
                 future.set_exception(exception)
             finally:
-                tracer.event("job.done", job=name, seconds=round(time.monotonic() - started, 3))
+                event("job.done", job=name, seconds=round(time.monotonic() - started, 3))
 
         thread = threading.Thread(target=run, name="portforge-" + name, daemon=True)
         with _LOCK:
             _THREADS.append(thread)
         thread.start()
         return future
+
+
+_TRACE_LOCK = threading.Lock()
+_trace = None
+
+
+def trace(log_dir: str | os.PathLike) -> Path:
+    """Start appending events to ``<log_dir>/events.jsonl`` (idempotent)."""
+    global _trace
+    directory = Path(log_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    with _TRACE_LOCK:
+        if _trace is None:
+            _trace = (directory / "events.jsonl").open("a", encoding="utf-8")
+        return Path(_trace.name)
+
+
+def event(kind: str, **fields) -> None:
+    """Append one event; a no-op while no trace is open."""
+    with _TRACE_LOCK:
+        if _trace is None:
+            return
+        record = {"time": datetime.now(timezone.utc).isoformat(), "kind": kind, **fields}
+        _trace.write(json.dumps(record, default=str) + "\n")
+        _trace.flush()
+
+
+def end_trace() -> None:
+    global _trace
+    with _TRACE_LOCK:
+        if _trace is not None:
+            _trace.close()
+        _trace = None

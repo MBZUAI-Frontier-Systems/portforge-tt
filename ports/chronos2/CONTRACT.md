@@ -33,7 +33,9 @@ cross-learning/group attention across unrelated series rows is NOT part of this
 contract; a later multivariate/covariate extension is separate work with its own
 validation. Do not close/open another device.
 Optional `DEVICE_OPTIONS`: `trace_region_size` 0–128 MiB (potentially per bank),
-`l1_small_size` 0–128 KiB, `num_hw_cqs` 1–2. Return CPU-visible results.
+`l1_small_size` 0–128 KiB, `num_command_queues` 1–2. Return CPU-visible results.
+During calls, PyTorch learned ops on the host CPU are rejected; host matmuls
+pass only when no operand carries model weights (e.g. RoPE angles from positions).
 
 Evaluation selects `bf16` (default), `fp32`, `fp16`, or `bfp8_b` explicitly and
 passes it to the factory. Declare actual dominant weight/activation formats,
@@ -53,8 +55,28 @@ replace that oracle or relax gates. Sensitive arithmetic (arcsinh scaling,
 patch normalization, quantile-head accumulation) is a legitimate place for
 declared FP32 exceptions with measured justification.
 
-Required envelope: batch 1–4, context up to 512 points, prediction length up to
-64. Preserve masks, row order and repeated-call semantics. Quantile forecast
+Required envelope: batch 1–1024 series per call on one card (1–4096 on the
+mesh stage), context up to 512 points, prediction length up to 64. Preserve
+masks, row order and repeated-call semantics.
+
+Two deployments are measured and ranked on separate frontiers:
+
+- **Single card** (`perf`): the bringup cases plus a batch sweep of 1, 2, 4,
+  16, 64, 256 and 1024 distinct series. Latency percentiles come from cases of
+  batch ≤4 (single-stream use); throughput, the best items/s on the sweep, is
+  where large batches count (offline use).
+- **Data parallel** (`mesh`): the same evaluation with `device` a 1×4
+  `MeshDevice` over four cards of one host, swept over 4, 6, 64, 1024 and 4096
+  series. Replicate weights to every card
+  (`ttnn.replicate_tensor_to_mesh_mapper`), split the batch along dim 0
+  (`ttnn.shard_tensor_to_mesh_mapper`), and gather with
+  `ttnn.concat_mesh_to_tensor_composer`. Batches that do not divide by the
+  card count (6) must still be exact: pad and drop the padding. Rows stay
+  independent; there is no chip-to-chip traffic. On one card `device` is a 1×1
+  `MeshDevice`, so the same backend serves both (`device.get_num_devices()`).
+  Board energy is summed over the four cards; DRAM is per card. Develop it with
+  `port_run(..., mesh=True)`, which exposes the same four cards so
+  `ttnn.open_mesh_device(ttnn.MeshShape(1, 4))` works in a probe. Quantile forecast
 error must be finite and max-row NRMSE ≤0.04 against the independent FP32
 reference on every numerical case. Batch/single/reorder/masked/revisit outputs
 for the same series must agree within max-row NRMSE ≤0.01 (float outputs are not
@@ -92,7 +114,7 @@ source hash. Performance claims must be checked against the controller's
 original requests and results.
 
 The run sandbox mounts the controller's public `/models.json` registry and
-`/models.py` read-only, plus prepared `/input` files and routed `/weights`
+`/portforge_models.py` read-only, plus prepared `/input` files and routed `/weights`
 (config.json + model.safetensors). Inspect these with a bounded `port_run`
 before assuming a metadata schema. Registry entries contain official file
 hashes/sizes and architecture constraints.

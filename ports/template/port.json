@@ -16,6 +16,17 @@
   "bf16",
   "bfp8_b"
  ],
+ "optimization": {
+  "scenario": "single_stream",
+  "constraints": [],
+  "pareto": [
+   "p50_latency",
+   "p99_latency",
+   "throughput",
+   "joules_per_item",
+   "dram_bytes"
+  ]
+ },
  "corpus": {
   "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
   "file": null

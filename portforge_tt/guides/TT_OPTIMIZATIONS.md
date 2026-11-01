@@ -1,6 +1,7 @@
 # TT optimization catalogue
 
-Generated from `optimizations.json` (the controller reads the JSON; keep both in sync).
+The controller reads technique ids, categories and titles from this file's headings
+(`## <category>: ...` sections, `### <id in backticks> — <title>` entries); keep that format.
 Every entry is a Blackhole/TT-Metal technique with a working exemplar in the TT-Metal
 checkout (`/opt/tt-metal` in the sandbox). Read the exemplar before implementing.
 
@@ -280,9 +281,9 @@ checkout (`/opt/tt-metal` in the sandbox). Read the exemplar before implementing
 ### `data-parallel-mesh` — Data parallel across a card mesh
 
 - **Mechanism:** Replicate weights on a MeshDevice and shard the batch (chronos_forecast: 4x p150 ~4.36x).
-- **Helps when:** Throughput objectives with more than one card.
+- **Helps when:** Throughput objectives with more than one card; evaluated by the mesh stage when a pack declares mesh_cards.
 - **Combine/conflict with:** `trace-capture`
-- **Risk:** needs mesh access in the sandbox
+- **Risk:** uneven batches need padding; host-side split and gather can dominate small batches
 - **Exemplar:** `models/experimental/chronos_forecast/tests` (source: chronos_forecast)
 
 ### `subdevice-prefetch` — Sub-devices with a DRAM prefetcher

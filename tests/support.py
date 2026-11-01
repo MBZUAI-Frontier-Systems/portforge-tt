@@ -10,7 +10,8 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]          # the checkout / installed tree
 HARNESS = ROOT / "portforge_tt"                     # the flat-runnable package
 PACK = ROOT / "ports" / "parakeet"
-for path in (PACK, HARNESS):
+# Tests import the modules flat, as a frozen run harness does: every code directory on sys.path.
+for path in (PACK, *(HARNESS / folder for folder in ("control", "ranking", "remote")), HARNESS):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 os.environ.setdefault("PORTFORGE_REPOSITORY_ROOT", str(ROOT.parents[1]))
@@ -41,9 +42,9 @@ def future(value):
     return FakeFuture(value)
 
 
-def configure_loop(loop):
-    """Load the test pack into the controller module."""
-    return loop.configure_port(PACK)
+def configure_port():
+    """Select the test pack for every controller-side module."""
+    return port.configure(PACK)
 
 
 def write_harness(harness):
@@ -51,8 +52,9 @@ def write_harness(harness):
     import shutil
     harness = Path(harness)
     harness.mkdir(parents=True, exist_ok=True)
-    for path in HARNESS.glob("*.py"):
-        shutil.copyfile(path, harness / path.name)
+    for folder in ("control", "ranking", "remote"):
+        for path in (HARNESS / folder).glob("[!_]*.py"):
+            shutil.copyfile(path, harness / path.name)
     agents = harness / "agents"
     agents.mkdir(exist_ok=True)
     for path in (HARNESS / "agents").glob("*.py"):

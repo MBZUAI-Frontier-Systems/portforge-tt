@@ -21,7 +21,7 @@ import time
 import yaml
 
 if __package__:  # installed as part of the portforge_tt package
-    from .runner import safe_file, write_json
+    from ..remote.runner import safe_file, write_json
 else:  # flat: a frozen run harness or a direct script execution
     from runner import safe_file, write_json
 
@@ -91,7 +91,7 @@ def load(path):
                 raise ValueError('runtime paths must be absolute')
         if role == 'tt' and 'weights_by_model' in options:
             if __package__:
-                from .portforge_models import model_spec
+                from ..remote.portforge_models import model_spec
             else:
                 from portforge_models import model_spec
             weights = options['weights_by_model']

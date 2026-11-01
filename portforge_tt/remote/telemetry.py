@@ -34,6 +34,9 @@ def hwmon_for_pci(pci, root=HWMON):
 
 
 def read_watts(hwmon):
+    """Board power of one card, or the sum over a list of cards (a mesh job's leased cards)."""
+    if isinstance(hwmon, (list, tuple)):
+        return sum(read_watts(path) for path in hwmon)
     return int((Path(hwmon) / 'power1_input').read_text().strip()) / 1e6
 
 
@@ -41,7 +44,8 @@ class PowerSampler:
     """Background sampler of (unix_seconds, watts); tolerant of transient read errors."""
 
     def __init__(self, hwmon, interval=0.1):
-        self.hwmon, self.interval, self.samples = Path(hwmon), interval, []
+        self.hwmon = [Path(p) for p in hwmon] if isinstance(hwmon, (list, tuple)) else Path(hwmon)
+        self.interval, self.samples = interval, []
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
 

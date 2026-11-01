@@ -6,13 +6,12 @@ card through scoped MCP tools. A trusted evaluator compares every candidate
 with an independent FP32 reference, first on small suites and finally, once,
 on a frozen held-out corpus.
 
-The package is self-contained (no CHIA/Ray dependency): ``runtime`` provides
-local resource leases and background jobs, ``mcpserver`` serves the agent
-tools over FastMCP, and ``agents`` wraps the ``opencode``, ``claude`` and
-``codex`` CLIs. The top-level modules also run *flat* — a campaign freezes
-the harness source into ``runs/<run>/harness/`` and re-executes those plain
-files — which is why sibling imports there use the ``if __package__:`` shim
-and ``agents`` keeps working as a top-level package inside the harness.
+``control/`` runs a campaign (``portforge`` is control/controller.py),
+``ranking/`` ranks passing candidates, ``remote/`` is what the TT and
+reference hosts run, and ``agents/`` wraps the opencode, claude and codex CLIs.
+Every module also runs *flat*: a campaign copies the code directories into one
+``runs/<run>/harness/`` and re-executes from there, and the remote hosts receive
+plain files, which is why imports use the ``if __package__:`` shim.
 """
 
 __version__ = "2.0.0"

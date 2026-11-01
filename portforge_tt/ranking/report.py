@@ -1,6 +1,6 @@
 """Multi-objective report of one or more campaign runs (any pack).
 
-    python -m portforge_tt.report runs/<run> [runs/<other> ...] [--optimize METRIC]
+    python -m portforge_tt.ranking.report runs/<run> [runs/<other> ...] [--optimize METRIC]
         [--constraint EXPR ...] [--json out.json] [--markdown out.md]
 
 Reads only trusted receipts (jobs/*/request.json, result.json, source.json) via
@@ -36,7 +36,7 @@ def build(runs, chosen):
     groups = []
     for run in runs:
         nodes = search.build(run)
-        for stage in ('perf', 'bringup'):
+        for stage in ('perf', 'mesh', 'bringup'):
             for front in search.frontier(nodes, chosen, stage):
                 rows = []
                 for node in nodes:

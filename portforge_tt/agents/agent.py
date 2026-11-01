@@ -21,8 +21,8 @@ import subprocess
 import tempfile
 
 if __package__ and "." in __package__:  # installed inside portforge_tt
-    from ..runtime import job
-    from ..port import load_port
+    from ..control.runtime import job
+    from ..control.port import load_port
 else:  # frozen flat harness: this package sits at the top level
     from runtime import job
     from port import load_port

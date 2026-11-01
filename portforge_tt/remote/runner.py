@@ -23,10 +23,10 @@ import time
 
 if __package__:  # installed as part of the portforge_tt package
     from .portforge_models import model_spec
-    from . import opprofile, telemetry
+    from . import opprofile, portforge_eval, telemetry
 else:  # flat: runs as harness/runner.py on the TT host
     from portforge_models import model_spec
-    import opprofile, telemetry
+    import opprofile, portforge_eval, telemetry
 
 METAL = PYTHON = HEALTH = LEASES = None
 MOUNTS, CARD_ALLOWLIST = (), ()
@@ -34,9 +34,14 @@ WEIGHTS_BY_MODEL = {}
 HOST_MEMORY_LIMIT_BYTES = 64 * 1024**3
 FULL_TIMEOUT_SECONDS = 21600
 PCI_PATTERN = r'[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]'
-STAGES = ('smoke', 'bringup', 'perf', 'full')
-PRECISIONS = ('bf16', 'fp32', 'fp16', 'bfp8_b')
+STAGES = portforge_eval.ALL_STAGES
+MESH_CARDS_BOUNDS = portforge_eval.MESH_CARDS_BOUNDS  # the mesh stage leases this many cards at once
+MESH_LEASE_WAIT_SECONDS = 1800  # every card must be free together; single-card jobs wait 300 s
+PRECISIONS = portforge_eval.TT_PRECISIONS
 # Non-gate evaluator facts forwarded into result.json (the controller never fetches the file).
+# Profile jobs: smoke/bringup inputs, or one perf case (PORTFORGE_PROFILE_CASE) with a few repeats.
+PROFILE_STAGES = ('smoke', 'bringup', 'perf')
+PROFILE_CASE = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,63}')
 PROFILE_ENV = {'TT_METAL_DEVICE_PROFILER': '1', 'TT_METAL_PROFILER_DIR': '/output/profiler',
                'PORTFORGE_PROFILE': '1'}
 FORWARDED_MEASUREMENTS = ('load_seconds', 'resident_dram_bytes', 'trace_reserved_bytes', 'host_peak_rss_bytes',
@@ -177,7 +182,14 @@ def checkpoint(model):
     return path, '/weights' if path.is_dir() else '/weights/' + path.name
 
 
-def sandbox(root, job, pci, node, model, extra_env=None):
+def valid_profile(request):
+    stage, case = request.get('stage'), request.get('case')
+    return stage in PROFILE_STAGES and (stage == 'perf') == bool(case) and (
+        not case or (isinstance(case, str) and PROFILE_CASE.fullmatch(case) is not None))
+
+
+def sandbox(root, job, pcis, nodes, model, extra_env=None):
+    """bwrap argv exposing exactly the leased cards (``pcis``/``nodes`` are parallel lists)."""
     weights, target = checkpoint(model)
     args = ['bwrap', '--die-with-parent', '--new-session', '--unshare-all', '--clearenv']
     for path in ('/usr', '/bin', '/lib', '/lib64', '/sys', '/etc/ld.so.cache', '/etc/hosts'):
@@ -189,8 +201,9 @@ def sandbox(root, job, pci, node, model, extra_env=None):
              '--ro-bind', str(root / 'harness/evaluate.py'), '/evaluate.py',
              '--ro-bind', str(root / 'harness/portforge_eval.py'), '/portforge_eval.py',
              '--ro-bind', str(root / 'harness/portforge_models.py'), '/portforge_models.py',
-             '--ro-bind', str(root / 'harness/models.json'), '/models.json',
-             '--dev-bind', '/dev/tenstorrent/' + node, '/dev/tenstorrent/' + node]
+             '--ro-bind', str(root / 'harness/models.json'), '/models.json']
+    for node in nodes:
+        args += ['--dev-bind', '/dev/tenstorrent/' + node, '/dev/tenstorrent/' + node]
     if weights.is_dir():
         for filename in model_spec(model)['files']:
             if (weights / filename).is_file():
@@ -211,7 +224,7 @@ def sandbox(root, job, pci, node, model, extra_env=None):
     # No /etc/passwd in the sandbox: getpass.getuser() (torch._dynamo imports it) needs LOGNAME/USER.
     env = {'PATH': str(PYTHON.parent) + ':/usr/bin:/bin', 'HOME': '/work', 'USER': 'portforge', 'LOGNAME': 'portforge',
            'PYTHONPATH': '/work:' + str(METAL),
-           'TT_METAL_HOME': str(METAL), 'TT_METAL_CACHE': '/work/.cache', 'TT_VISIBLE_DEVICES': pci,
+           'TT_METAL_HOME': str(METAL), 'TT_METAL_CACHE': '/work/.cache', 'TT_VISIBLE_DEVICES': ','.join(pcis),
            'PYTHONNOUSERSITE': '1', 'OMP_NUM_THREADS': '12', 'HF_HUB_OFFLINE': '1', **(extra_env or {})}
     for key, value in env.items():
         args += ['--setenv', key, value]
@@ -380,8 +393,8 @@ def main(root, request):
         target = safe_file(job / 'work', name)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content)
-    if request['kind'] == 'profile' and request.get('stage') not in ('smoke', 'bringup'):
-        raise ValueError('profile uses smoke or bringup inputs')
+    if request['kind'] == 'profile' and not valid_profile(request):
+        raise ValueError('profile uses smoke or bringup inputs, or perf with one case')
     public_stage = request.get('public_input_stage', '')
     if public_stage and (request['kind'] != 'run' or public_stage not in ('smoke', 'bringup')):
         raise ValueError('public_input_stage requires run and smoke/bringup')
@@ -409,11 +422,11 @@ def main(root, request):
             raise ValueError('invalid candidate precision')
         command = [str(PYTHON), '/evaluate.py', 'candidate', '--input', '/input', '--output', '/output',
                    '--weights', weight_target, '--precision', precision]
-        total = {'smoke': 900, 'bringup': 1200, 'perf': 3600, 'full': FULL_TIMEOUT_SECONDS}[stage]
+        total = {'smoke': 900, 'bringup': 1200, 'perf': 3600, 'mesh': 3600, 'full': FULL_TIMEOUT_SECONDS}[stage]
     elif request['kind'] == 'profile':
-        # One device-profiled candidate pass over public smoke/bringup inputs; no oracle, no gate.
-        if request.get('stage') not in ('smoke', 'bringup'):
-            raise ValueError('profile uses smoke or bringup inputs')
+        # One device-profiled candidate pass over public inputs; no oracle, no gate.
+        if not valid_profile(request):
+            raise ValueError('profile uses smoke or bringup inputs, or perf with one case')
         precision = request.get('precision', 'bf16')
         if precision not in PRECISIONS:
             raise ValueError('invalid candidate precision')
@@ -433,14 +446,25 @@ def main(root, request):
     else:
         command = ['/bin/bash', '--noprofile', '--norc', '-c', request['command']]
         total = min(max(int(request.get('timeout', 120)), 1), 300)
+    needed, mesh = 1, None
+    if request['kind'] == 'evaluate' and request['stage'] == 'mesh':
+        # The trusted suite (prepared by the controller, copied above) names the card count.
+        mesh = json.loads((job / 'input' / 'suite.json').read_text()).get('mesh_cards', 'missing')
+    elif request['kind'] == 'run' and 'mesh_cards' in request:
+        mesh = request['mesh_cards']  # set by the controller from port.json, never by the agent
+    if mesh is not None:
+        if type(mesh) is not int or not MESH_CARDS_BOUNDS[0] <= mesh <= MESH_CARDS_BOUNDS[1]:
+            raise ValueError('mesh jobs need integer mesh_cards in %s' % (MESH_CARDS_BOUNDS,))
+        needed = mesh
     started = time.monotonic()
-    lease = None
+    leased = []  # (pci, node, lock handle); all-or-nothing, so two mesh jobs never deadlock
     LEASES.mkdir(parents=True, exist_ok=True)
-    while not lease:
+    while not leased:
         available = [(p, n) for p, n in cards().items()
                      if (request['kind'] == 'preflight' and p == request.get('pci'))
                      or (request['kind'] != 'preflight' and health(p)['state'] == 'healthy')]
-        if not available or time.monotonic() - started > 300:
+        if (len(available) < needed
+                or time.monotonic() - started > (MESH_LEASE_WAIT_SECONDS if needed > 1 else 300)):
             return {'returncode': 75, 'failure': 'no_healthy_or_free_card'}
         for pci, node in available:
             handle = (LEASES / ('device-' + pci.replace(':', '_') + '.lock')).open('a')
@@ -449,20 +473,28 @@ def main(root, request):
                 if request['kind'] != 'preflight' and health(pci)['state'] != 'healthy':
                     handle.close()
                     continue
-                lease = handle
-                break
+                leased.append((pci, node, handle))
+                if len(leased) == needed:
+                    break
             except BlockingIOError:
                 handle.close()
-        if not lease:
+        if len(leased) < needed:
+            for _pci, _node, handle in leased:
+                handle.close()
+            leased = []
             time.sleep(1)
+    pcis, nodes = [p for p, _, _ in leased], [n for _, n, _ in leased]
+    pci = pcis[0]
     try:
-        write_json(job / 'identity.json', {'pci': pci, 'model': model, 'started': time.time()})
-        sensor = telemetry.hwmon_for_pci(pci) if request['kind'] == 'evaluate' else None
+        write_json(job / 'identity.json', {'pci': pci, 'pcis': pcis, 'model': model, 'started': time.time()})
+        sensors = [telemetry.hwmon_for_pci(p) for p in pcis] if request['kind'] == 'evaluate' else []
+        sensor = sensors if sensors and all(sensors) else None  # board power summed over the leased cards
         idle = telemetry.idle_watts(sensor) if sensor else None
         sampler = telemetry.PowerSampler(sensor).start() if sensor else None
         try:
-            extra = PROFILE_ENV if request['kind'] == 'profile' else None
-            result = execute(['timeout', '--kill-after=10s', str(total)] + sandbox(root, job, pci, node, model, extra)
+            extra = ({**PROFILE_ENV, **({'PORTFORGE_PROFILE_CASE': request['case']} if request.get('case') else {})}
+                     if request['kind'] == 'profile' else None)
+            result = execute(['timeout', '--kill-after=10s', str(total)] + sandbox(root, job, pcis, nodes, model, extra)
                              + command, job, total + 2, request['kind'] in ('evaluate', 'profile'),
                              request.get('stage', 'smoke'))
         finally:
@@ -483,7 +515,7 @@ def main(root, request):
         if samples is not None:
             telemetry.write_trace(job / 'power.json', samples)
             result['energy'] = telemetry.energy_report(samples, measured, idle)
-        result.update(pci=pci, model=model, job=job.name,
+        result.update(pci=pci, **({'pcis': pcis} if needed > 1 else {}), model=model, job=job.name,
                       stdout=(job / 'stdout.log').read_text(errors='replace')[-12000:],
                       stderr=(job / 'stderr.log').read_text(errors='replace')[-12000:])
         result['failure'] = failure_kind(result['returncode'], result['stdout'] + result['stderr'], result['timeout'],
@@ -495,13 +527,15 @@ def main(root, request):
         hashing_timeout = result['failure'] == 'timeout' and (result.get('progress') or {}).get('phase') == 'verify_checkpoint'
         if not hashing_timeout and (result['failure'] in ('timeout', 'device_initialization', 'host_memory_limit')
                                     or (request['kind'] == 'preflight' and result['returncode'])):
-            mark(pci, 'quarantined', job.name)
+            for card in pcis:  # a mesh failure cannot be pinned on one card; each needs its own preflight
+                mark(card, 'quarantined', job.name)
         elif request['kind'] == 'preflight' and result['returncode'] == 0:
             mark(pci, 'healthy', job.name)
         write_json(job / 'result.json', result)
         return result
     finally:
-        lease.close()
+        for _pci, _node, handle in leased:
+            handle.close()
 
 
 if __name__ == '__main__':

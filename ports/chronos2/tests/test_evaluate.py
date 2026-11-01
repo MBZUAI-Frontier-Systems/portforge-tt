@@ -4,10 +4,10 @@ import sys
 from pathlib import Path
 
 PACK = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(PACK), str(PACK.parents[1] / "portforge_tt")]
-import models  # noqa: E402
+sys.path[:0] = [str(PACK), str(PACK.parents[1] / "portforge_tt" / "remote")]
+import portforge_models  # noqa: E402
 
-models.use_registry(PACK / "models.json")
+portforge_models.use_registry(PACK / "models.json")
 
 
 def shipped_corpus(test):
@@ -112,7 +112,7 @@ class PrecisionTests(unittest.TestCase):
                 evaluate.validate_precision("bf16", policy)
 
     def test_direct_gpu_host_is_explicit_and_slurm_requires_allocation(self):
-        with patch("evaluate.socket.gethostname", return_value="dedicated-gpu"), patch.dict(os.environ, {}, clear=True):
+        with patch("socket.gethostname", return_value="dedicated-gpu"), patch.dict(os.environ, {}, clear=True):
             with self.assertRaises(RuntimeError):
                 evaluate.reference_execution()
             with patch.dict(os.environ, {"PORTFORGE_REFERENCE_EXECUTION": "direct"}):
@@ -123,7 +123,7 @@ class PrecisionTests(unittest.TestCase):
     def test_login_nodes_and_unknown_execution_modes_are_rejected(self):
         for mode, host in (("direct", "login-student-lab"), ("slurm", "lo-login"), ("unknown", "gpu")):
             with patch.dict(os.environ, {"PORTFORGE_REFERENCE_EXECUTION": mode, "SLURM_JOB_ID": "123"}), \
-                 patch("evaluate.socket.gethostname", return_value=host), self.assertRaises(RuntimeError):
+                 patch("socket.gethostname", return_value=host), self.assertRaises(RuntimeError):
                 evaluate.reference_execution()
 
     def test_cpu_reference_is_allowed_and_recorded_not_rejected(self):
@@ -134,12 +134,30 @@ class PrecisionTests(unittest.TestCase):
                    "huggingface_hub": SimpleNamespace(
                         hf_hub_download=Mock(side_effect=RuntimeError("stop-after-device-check")))}
         with patch.dict(os.environ, {"PORTFORGE_REFERENCE_EXECUTION": "direct"}), \
-             patch("evaluate.socket.gethostname", return_value="dedicated-gpu"), \
+             patch("socket.gethostname", return_value="dedicated-gpu"), \
              patch.dict("sys.modules", modules), \
-             patch.object(evaluate, "Progress", lambda *a, **kw: SimpleNamespace(
+             patch.object(evaluate.portforge_eval, "Progress", lambda *a, **kw: SimpleNamespace(
                  mark=lambda *a, **kw: None)), \
              self.assertRaisesRegex(RuntimeError, "stop-after-device-check"):
             with tempfile.TemporaryDirectory() as out:
+                evaluate.reference(SimpleNamespace(command="reference", stage="smoke", model="chronos2",
+                                                   corpus=str(corpus), out=out))
+
+    def test_nearly_full_shared_gpu_moves_the_oracle_to_cpu(self):
+        corpus = shipped_corpus(self)
+        for free, expected in ((1 << 30, RuntimeError), (16 << 30, AttributeError)):
+            # The fake torch has no .backends: touching it (the CUDA path) raises AttributeError.
+            modules = {"numpy": SimpleNamespace(), "torch": SimpleNamespace(
+                            cuda=SimpleNamespace(is_available=lambda: True, mem_get_info=lambda f=free: (f, 32 << 30)),
+                            manual_seed=lambda seed: None, set_num_threads=lambda n: None),
+                       "huggingface_hub": SimpleNamespace(
+                            hf_hub_download=Mock(side_effect=RuntimeError("stop-after-device-check")))}
+            with self.subTest(free=free), patch.dict(os.environ, {"PORTFORGE_REFERENCE_EXECUTION": "direct"}), \
+                 patch("socket.gethostname", return_value="dedicated-gpu"), \
+                 patch.dict("sys.modules", modules), \
+                 patch.object(evaluate.portforge_eval, "Progress", lambda *a, **kw: SimpleNamespace(
+                     mark=lambda *a, **kw: None)), \
+                 self.assertRaises(expected), tempfile.TemporaryDirectory() as out:
                 evaluate.reference(SimpleNamespace(command="reference", stage="smoke", model="chronos2",
                                                    corpus=str(corpus), out=out))
 
@@ -148,7 +166,7 @@ class PrecisionTests(unittest.TestCase):
             cuda=SimpleNamespace(is_available=lambda: False),
             manual_seed=lambda seed: None, set_num_threads=lambda n: None)}
         with patch.dict("sys.modules", modules), \
-             patch.object(evaluate, "reference_execution", return_value="direct"), \
+             patch.object(evaluate.portforge_eval, "reference_execution", return_value="direct"), \
              self.assertRaisesRegex(ValueError, "float32/bfloat16"):
             evaluate.reference(SimpleNamespace(command="reference-benchmark", precision="fp16",
                                                input="i", oracle="o", output="out", model="chronos2"))
@@ -185,6 +203,26 @@ class SuiteTests(unittest.TestCase):
         self.assertEqual(digest, evaluate.CORPUS_HASH if hasattr(evaluate, "CORPUS_HASH")
                          else evaluate.CORPUS_SHA256)
         evaluate.make_suite(corpus, "smoke", "chronos2")
+
+    def test_sweeps_reach_the_offline_envelope_with_distinct_rows(self):
+        corpus = json.loads(shipped_corpus(self).read_text())  # real series: synthetic ones repeat
+        for stage, cards, top in (("perf", None, evaluate.MAX_BATCH),
+                                  ("mesh", evaluate.MESH_CARDS, evaluate.MESH_CARDS * evaluate.MAX_BATCH)):
+            spec, labels = evaluate.make_suite(corpus, stage, "chronos2")
+            evaluate.portforge_eval.check_suite(spec)
+            self.assertEqual(spec.get("mesh_cards"), cards)
+            sweep = [case for case in spec["cases"] if case.get("batch")]
+            self.assertEqual(max(case["batch"] for case in sweep), top)
+            for case in sweep:
+                self.assertEqual(len(case["series"]), case["batch"])
+                self.assertEqual(len(case["starts"]), case["batch"])
+                self.assertEqual(len(labels[case["name"]]), case["batch"])
+                self.assertTrue(set(case["series"]) <= set(evaluate.SWEEP_SERIES))
+                rows = {tuple(evaluate.series_window(corpus["series"][key], 512, 64, 0, start)[0])
+                        for key, start in zip(case["series"], case["starts"])}
+                self.assertEqual(len(rows), case["batch"])
+        bringup, _ = evaluate.make_suite(corpus, "bringup", "chronos2")
+        self.assertFalse(any("starts" in case or case.get("batch") for case in bringup["cases"]))
 
     def test_suite_identity_rejects_tampering_and_missing_version(self):
         spec, _ = self.suite("smoke")

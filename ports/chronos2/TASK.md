@@ -35,6 +35,12 @@ expensive to repeat. Use public research and the pinned installed source.
    Declare precision exceptions and accumulation policy. Never disguise a
    precision change as a same-precision speedup. CUDA FP32/BF16 references
    provide additional context.
+   Optimize both deployments CONTRACT.md defines. On one card, the `perf`
+   sweep runs up to 1024 series per call: keep small-batch latency and raise
+   large-batch throughput (fold the batch into matmul M, keep activations
+   resident, size grids and blocks for large M). Then run the same backend data
+   parallel on the four-card `mesh` stage and make it scale. Each stage has its
+   own frontier; a large-batch gain must not cost small-batch latency unnoticed.
 6. Write REPORT.md with correctness evidence, reproducible commands, baseline
    versus optimized latency and memory, limitations and sources. Keep STATE.md
    short: completed work, current hypothesis, pending job IDs, next action.

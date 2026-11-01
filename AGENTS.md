@@ -10,7 +10,7 @@ Read `README.md` first, then the closest existing pack:
 | Model shape | Closest pack |
 |---|---|
 | Encoder, float outputs | `ports/esm2` (logits), `ports/chronos2` (quantile forecasts) |
-| Encoder-decoder or autoregressive tokens | `ports/nllb` (translation), `ports/parakeet` (speech) |
+| Encoder-decoder or autoregressive tokens | `ports/nllb` (translation), `ports/parakeet` (speech), `ports/pocket_tts` (TTS) |
 
 ## 1. Choose the model and pin it
 
@@ -22,7 +22,7 @@ the envelope (batch sizes, input lengths, output lengths, languages or modes).
   the weight files and their SHA-256 and byte sizes (from the Hugging Face LFS
   API, not from memory), and the `config.json` fields the port relies on under
   `architecture`.
-- Check it: `python -m portforge_tt.portforge_models <key> /tmp/ckpt --download --registry ports/<name>/models.json`.
+- Check it: `python -m portforge_tt.remote.portforge_models <key> /tmp/ckpt --download --registry ports/<name>/models.json`.
 
 ## 2. Choose the benchmark with the user
 
@@ -35,7 +35,7 @@ lengths, masking).
   `smoke` (1 case), `bringup` (about 8) and `full` (held out).
 - Record provenance, licenses, generators and seeds in `BENCHMARK.md`.
 - Compute its identity and pin it in both `port.json` and `evaluate.py`:
-  `python -c "import json; from portforge_tt.cluster import identity; print(identity(json.load(open('ports/<name>/corpus.json'))))"`.
+  `python -c "import json; from portforge_tt.control.cluster import identity; print(identity(json.load(open('ports/<name>/corpus.json'))))"`.
 - Keep `full` cases out of development; agents never see them.
 
 **Ask**: the gates. Earlier packs use max-row NRMSE ≤ 0.04 against the FP32 oracle,
@@ -44,15 +44,18 @@ tokens for decoders, and a task metric on `full` (for example ≤ 2% worse WER).
 
 **Ask**: the objective after the gates, recorded as `optimization` in `port.json`:
 the deployment scenario (`single_stream`, `offline` or `ar_interactive`), an
-optional primary metric and constraints (see `portforge_tt/objective.py`), and
-whether `mergeability_gate` should block submission. The default ranks on the
+optional primary metric and constraints (see `portforge_tt/ranking/objective.py`). The
+default ranks on the
 Pareto front of p50/p99 latency, throughput, energy per item and device memory.
 Also ask for `robustness` inputs (OOD, noise, longest and extreme inputs) and
 whether the batch envelope matches real use: the perf sweep never leaves it.
 
 ## 3. Write the evaluator
 
-Implement the four functions in `ports/<name>/evaluate.py`:
+`ports/<name>/evaluate.py` builds on the evaluator kit at the end of
+`portforge_tt/remote/portforge_eval.py`, which owns receipts, precision checks, the
+host-compute guard, mesh devices, timing, determinism, verdicts and the command
+line. Start from `ports/template/evaluate.py`; the pack writes only:
 
 - `make_suite(corpus, stage, model)` builds the smoke, bringup, perf and full
   suites and returns `(spec, labels)`. Perf is the bringup cases plus a
@@ -61,18 +64,21 @@ Implement the four functions in `ports/<name>/evaluate.py`:
   `**portforge_eval.perf_fields(stage)`. Every `compare_to` must name a case of
   the same stage; `portforge_eval.check_suite` enforces this and the launcher
   rejects bad suites.
-- `reference(args)` runs the official implementation in FP32 on the reference
-  host and writes public inputs and private oracle outputs. Disable TF32 for
-  matmuls and cuDNN convolutions.
-- `candidate(args)` is generic; fill in `forward_case()` to call the backend
-  method named in `CONTRACT.md`. Keep its `repeat_schedule` loop and
-  `TimedWindow`: the runner integrates board power over those windows and the
-  profile job keeps device ops between their signposts.
-- `assess(args)` compares actual and oracle outputs and writes the verdict,
-  including `latency=portforge_eval.verdict_latency(checks)` and
-  `scaling=portforge_eval.scaling_curve(checks, spec["cases"])`.
+- `reference(args)` runs the official implementation in FP32 through
+  `portforge_eval.ReferenceRun`, which downloads and verifies the checkpoint,
+  turns TF32 off for matmuls and cuDNN, times the repeats and writes public
+  inputs and private oracle outputs.
+- `forward_case(backend, case, inputs, spec, config)` makes one timed call of the
+  backend method named in `CONTRACT.md` (plus `FORBIDDEN_HOST_OPS` and `ROWS`;
+  optionally `probe_case` for an untimed numerical call). `run_candidate` does
+  the rest, including the `TimedWindow` the runner integrates board power over.
+- `output_keys`, `check_case(check, case, a)` for one case's gates, and
+  optionally `quality(a)` for the task metric on `full`; `run_assess` writes the
+  verdict with latency percentiles and the scaling curve.
 
-Add `ports/<name>/tests/test_evaluate.py` (see an existing pack) and run it with
+`ports/esm2/evaluate.py` is the shortest complete example; `ports/nllb` shows
+`probe_case` and cross-case state. Add `ports/<name>/tests/test_evaluate.py`
+(see an existing pack) and run it with
 `python -m unittest discover -s ports/<name>/tests`.
 
 ## 4. Write the agent documents
@@ -102,7 +108,7 @@ keys, and which cards the campaign may lease.
   scripts/bundle_python_into_venv.sh python_env --force   # interpreter inside the venv, so the sandbox can mount it
   ```
   Download each delivery model's checkpoint from a copy of this repo on the host:
-  `~/portforge-tt/tt-metal/python_env/bin/python -m portforge_tt.portforge_models <key> ~/portforge-tt/checkpoints/<key> --download --registry ports/<name>/models.json`.
+  `~/portforge-tt/tt-metal/python_env/bin/python -m portforge_tt.remote.portforge_models <key> ~/portforge-tt/checkpoints/<key> --download --registry ports/<name>/models.json`.
   List the cards with `ls /sys/class/tenstorrent` or `tt-smi`.
 - Reference host: copy `port.json` and run `bash setup_reference.sh port.json`.
 - Fill a copy of `cluster.yaml`; keep it out of version control.
@@ -122,7 +128,7 @@ portforge --port ports/<name> --cluster my-cluster.yaml --hours 6 --detach
 
 While it runs, read `runs/<run>/status.json`, the turn files and
 `runs/<run>/search/frontier.json` (rebuilt each turn from trusted receipts), or
-print the ranked candidates with `python -m portforge_tt.report runs/<run>`. To steer the
+print the ranked candidates with `python -m portforge_tt.ranking.report runs/<run>`. To steer the
 agents, stop the controller and `--resume` with a `--resume-note`; editing the
 workspace's STATE.md does not reach the supervisor as a trusted instruction. If
 you share a failing held-out case with the agents, record that its later result

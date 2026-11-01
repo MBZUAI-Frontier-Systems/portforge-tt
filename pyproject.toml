@@ -29,10 +29,10 @@ dependencies = [
 dev = ["pytest>=7.0", "pre-commit>=3.0"]
 
 [project.scripts]
-portforge = "portforge_tt.portforge_loop:main"
+portforge = "portforge_tt.control.controller:main"
 
 [tool.setuptools]
-packages = ["portforge_tt", "portforge_tt.agents"]
+packages = ["portforge_tt", "portforge_tt.agents", "portforge_tt.control", "portforge_tt.ranking", "portforge_tt.remote"]
 
 [tool.setuptools.package-data]
 portforge_tt = ["prompts/*.md", "guides/*.md"]

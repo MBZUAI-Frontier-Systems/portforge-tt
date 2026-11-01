@@ -4,10 +4,10 @@ import sys
 from pathlib import Path
 
 PACK = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(PACK), str(PACK.parents[1] / "portforge_tt")]
-import models  # noqa: E402
+sys.path[:0] = [str(PACK), str(PACK.parents[1] / "portforge_tt" / "remote")]
+import portforge_models  # noqa: E402
 
-models.use_registry(PACK / "models.json")
+portforge_models.use_registry(PACK / "models.json")
 
 
 def shipped_corpus(test):
@@ -93,12 +93,12 @@ class SuiteTests(unittest.TestCase):
         runtime = types.SimpleNamespace(bfloat16=object(), float32=object(), bfloat8_b=object(), float16=object())
         policy = dict(mode="bf16", weights="bf16", activations="bf16", accumulation="fp32", exceptions=[])
         self.assertEqual(evaluate.validate_precision("bf16", policy, runtime)["requested"], "bf16")
-        with patch("evaluate.socket.gethostname", return_value="gpu-box"):
+        with patch("socket.gethostname", return_value="gpu-box"):
             import os
             with patch.dict(os.environ, {"PORTFORGE_REFERENCE_EXECUTION": "direct"}):
                 self.assertEqual(evaluate.reference_execution(), "direct")
         with patch.dict(os.environ, {"PORTFORGE_REFERENCE_EXECUTION": "direct"}), \
-             patch("evaluate.socket.gethostname", return_value="login-1"), self.assertRaises(RuntimeError):
+             patch("socket.gethostname", return_value="login-1"), self.assertRaises(RuntimeError):
             evaluate.reference_execution()
 
 

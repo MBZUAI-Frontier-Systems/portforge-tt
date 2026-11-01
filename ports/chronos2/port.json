@@ -16,6 +16,7 @@
   "bf16",
   "bfp8_b"
  ],
+ "mesh_cards": 4,
  "corpus": {
   "sha256": "f0b08df4fe80385da1d3e9a05e3779708c4e808b2da581aa974fea9505d64ae3",
   "file": "corpus.json"

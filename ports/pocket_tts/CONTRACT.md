@@ -63,7 +63,9 @@ deterministic preprocessing are allowed); learned inference — text embedding
 lookup, transformer, flow head, EOS head, Mimi decoder — must run on TT. The
 oracle is the official `pocket-tts==3.3.0` `TTSModel` in FP32 on the reference
 host. Optional `DEVICE_OPTIONS`: `trace_region_size` 0–128 MiB,
-`l1_small_size` 0–128 KiB, `num_hw_cqs` 1–2. Return CPU-visible results.
+`l1_small_size` 0–128 KiB, `num_command_queues` 1–2. Return CPU-visible results.
+During calls, PyTorch learned ops on the host CPU are rejected; host matmuls
+pass only when no operand carries model weights (e.g. RoPE angles from positions).
 
 ## Precision
 
@@ -136,7 +138,7 @@ evaluation. Corpus provenance: BENCHMARK.md.
 
 Collect results with `port_status(compact=True)`; `port_log` returns
 stdout/stderr only. `port_run` jobs see public inputs, never verdicts or
-oracle outputs, and mount `/models.json`, `/models.py`, prepared `/input`
+oracle outputs, and mount `/models.json`, `/portforge_models.py`, prepared `/input`
 files and routed `/weights` read-only. Do not exploit known test inputs,
 precompute outputs, run hidden CPU inference or alter the trusted evaluator.
 Timing includes transfers, host control, learned compute and synchronization,

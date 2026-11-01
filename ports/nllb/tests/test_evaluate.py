@@ -4,10 +4,10 @@ import sys
 from pathlib import Path
 
 PACK = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(PACK), str(PACK.parents[1] / "portforge_tt")]
-import models  # noqa: E402
+sys.path[:0] = [str(PACK), str(PACK.parents[1] / "portforge_tt" / "remote")]
+import portforge_models  # noqa: E402
 
-models.use_registry(PACK / "models.json")
+portforge_models.use_registry(PACK / "models.json")
 import contextlib
 import copy
 import hashlib
@@ -102,7 +102,7 @@ class PrecisionTests(unittest.TestCase):
                 evaluate.validate_precision("bf16", policy)
 
     def test_direct_gpu_host_is_explicit_and_slurm_requires_allocation(self):
-        with patch("evaluate.socket.gethostname", return_value="dedicated-gpu"), patch.dict(os.environ, {}, clear=True):
+        with patch("socket.gethostname", return_value="dedicated-gpu"), patch.dict(os.environ, {}, clear=True):
             with self.assertRaises(RuntimeError):
                 evaluate.reference_execution()
             with patch.dict(os.environ, {"PORTFORGE_REFERENCE_EXECUTION": "direct"}):
@@ -113,14 +113,14 @@ class PrecisionTests(unittest.TestCase):
     def test_login_nodes_and_unknown_execution_modes_are_rejected(self):
         for mode, host in (("direct", "login-student-lab"), ("slurm", "lo-login"), ("unknown", "gpu")):
             with patch.dict(os.environ, {"PORTFORGE_REFERENCE_EXECUTION": mode, "SLURM_JOB_ID": "123"}), \
-                 patch("evaluate.socket.gethostname", return_value=host), self.assertRaises(RuntimeError):
+                 patch("socket.gethostname", return_value=host), self.assertRaises(RuntimeError):
                 evaluate.reference_execution()
 
     def test_direct_mode_still_refuses_non_cuda_execution(self):
         modules = {"numpy": SimpleNamespace(), "torch": SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False)),
                    "transformers": SimpleNamespace(AutoModelForSeq2SeqLM=None, AutoTokenizer=None)}
         with patch.dict(os.environ, {"PORTFORGE_REFERENCE_EXECUTION": "direct"}), \
-             patch("evaluate.socket.gethostname", return_value="dedicated-gpu"), \
+             patch("socket.gethostname", return_value="dedicated-gpu"), \
              patch.dict("sys.modules", modules), self.assertRaisesRegex(RuntimeError, "CUDA required"):
             evaluate.reference(SimpleNamespace())
 
@@ -203,7 +203,7 @@ class SuiteTests(unittest.TestCase):
                               for filename, data in payloads.items()}
             for filename, data in payloads.items():
                 (root / filename).write_bytes(data)
-            with patch.object(evaluate, "model_spec", return_value=model), patch("models.model_spec", return_value=model):
+            with patch.object(evaluate, "model_spec", return_value=model), patch("portforge_models.model_spec", return_value=model):
                 self.assertEqual(evaluate.verify_weights(root, "3.3b"), model["files"])
                 (root / model["weight_files"][-1]).unlink()
                 with self.assertRaises(ValueError):
@@ -293,41 +293,38 @@ class AssessmentTests(unittest.TestCase):
         self.entries = []
         self.initialize_arrays()
 
-    def initialize_arrays(self):
+    def initialize_arrays(self, model_name="600m"):
+        architecture = evaluate.model_spec(model_name)["architecture"]
         self.expected, self.actual, self.entries = {}, {}, []
         for case in self.cases:
             name, rows = case["name"], len(case["texts"])
             self.expected[name + "__tokens"] = np.tile([2, 10, 40, 2], (rows, 1))
-            self.expected[name + "__encoder"] = np.ones((rows, 2, 2), dtype=np.float32)
-            self.expected[name + "__logits"] = np.ones((rows, 4), dtype=np.float32)
+            if case["numerical"]:
+                self.expected[name + "__encoder"] = np.ones((rows, 2, architecture["d_model"]), dtype=np.float32)
+                self.expected[name + "__logits"] = np.ones((rows, architecture["vocab_size"]), dtype=np.float32)
             self.entries.append(dict(name=name, seconds=[.1]))
         self.actual = {k: v.copy() for k, v in self.expected.items()}
 
     def run_assess(self):
-        evaluate.write_json(self.args.input / "suite.json", dict(version=1, stage=self.stage, cases=self.cases))
-        evaluate.write_json(self.args.output / "measurements.json", dict(cases=self.entries))
-        np.savez(self.args.output / "actual.npz", **self.actual)
-        np.savez(self.args.oracle / "oracle.npz", **self.expected)
+        self.write_fixture("600m")
         return evaluate.assess(self.args)
 
     def strict_fixture(self, model_name="1.3b-distilled"):
+        self.initialize_arrays(model_name)
+        return self.write_fixture(model_name)
+
+    def write_fixture(self, model_name):
+        """A version-2 suite with every identity file the evaluator checks, around the current arrays."""
         model = evaluate.model_spec(model_name)
         identity = evaluate.model_identity(model_name)
-        spec = dict(version=2, stage="bringup", cases=self.cases, gates=evaluate.GATES.copy(),
+        spec = dict(version=2, stage=self.stage, cases=self.cases, gates=evaluate.GATES.copy(),
                     timed_repeats=1, **identity)
         receipt = dict(model=model_name, repo_id=model["repo_id"], revision=model["revision"],
                        checkpoint_format=model["checkpoint_format"], verified_files=copy.deepcopy(model["files"]),
                        model_manifest_sha256=identity["model_manifest_sha256"], suite_sha256=evaluate.suite_hash(spec))
-        self.initialize_arrays()
-        inputs = {}
-        for case in self.cases:
-            rows, name = len(case["texts"]), case["name"]
-            self.expected[name + "__encoder"] = np.ones((rows, 2, model["architecture"]["d_model"]), dtype=np.float32)
-            self.expected[name + "__logits"] = np.ones((rows, model["architecture"]["vocab_size"]), dtype=np.float32)
-            inputs[name + "__input_ids"] = np.ones((rows, 2), dtype=np.int64)
-        self.actual = {k: v.copy() for k, v in self.expected.items()}
+        inputs = {case["name"] + "__input_ids": np.ones((len(case["texts"]), 2), dtype=np.int64) for case in self.cases}
         for case in self.entries:
-            case["first_seconds"] = .2
+            case.setdefault("first_seconds", .2)
         meta = dict(**identity, suite_sha256=evaluate.suite_hash(spec), timing_protocol=evaluate.TIMING_PROTOCOL,
                     verified_weight_files=model["files"], checkpoint_receipt=receipt, precision={"requested": "fp32"}, cases=self.entries)
         evaluate.write_json(self.args.input / "suite.json", spec)
@@ -460,11 +457,12 @@ class AssessmentTests(unittest.TestCase):
     def full_fixture(self, rows=1012):
         self.stage = "full"
         self.cases = [dict(name=f"{src}-{tgt}", src=src, tgt=tgt, texts=["source"] * rows,
-                           numerical=True, quality=True, target_id=10, max_new_tokens=4)
+                           numerical=False, quality=True, target_id=10, max_new_tokens=4)
                       for src, tgt in [("eng_Latn", l) for l in evaluate.LANGUAGES] + [(l, "eng_Latn") for l in evaluate.LANGUAGES]]
         self.initialize_arrays()
         evaluate.write_json(self.args.oracle / "labels.json", {c["name"]: ["human"] * rows for c in self.cases})
-        evaluate.write_json(self.args.oracle / "reference.json", dict(cases=[dict(name=c["name"], translations=["reference"] * rows) for c in self.cases]))
+        for entry in self.entries:  # reference.json (written by run_assess) carries the FP32 translations
+            entry["translations"] = ["reference"] * rows
 
     def quality_modules(self, candidate_score=60):
         tokenizer = SimpleNamespace(batch_decode=lambda rows, **kw: ["candidate"] * len(rows))

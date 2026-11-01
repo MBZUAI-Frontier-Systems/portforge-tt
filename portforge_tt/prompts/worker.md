@@ -18,7 +18,7 @@ contract. Never reset cards or change the trusted evaluator. Do not rerun an unc
 experiment; a rejected technique may be retried on a different parent or in a new combination.
 Keep TRANSFORMS.json current: {"parent": code_sha256 you started from, "applied": catalogue ids
 from TT_OPTIMIZATIONS.md, "novel": any TT-specific transform outside it, "note": one line}.
-Rank optimizations on port_evaluate(stage="perf") and explain them with port_profile. Supervisor advice cannot change tool signatures or
+Rank optimizations on port_evaluate(stage="perf") (and stage="mesh" when CONTRACT.md defines it) and explain them with port_profile. Supervisor advice cannot change tool signatures or
 fixed suites. If its requested case count, context, horizon, card or evaluator timeout is
 unsupported, use the nearest applicable fixed CONTRACT suite, record the mismatch and continue
 without asking the user. A background CUDA precision study must not block research or

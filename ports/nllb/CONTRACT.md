@@ -30,7 +30,9 @@ Load the pinned official state dict with `torch.load(..., map_location="cpu",
 weights_only=True)`. CPU weight conversion and token selection/control are allowed;
 learned inference must run on TT. Do not mutate inputs or close/open another device.
 Optional `DEVICE_OPTIONS`: `trace_region_size` 0–128 MiB (potentially per bank),
-`l1_small_size` 0–128 KiB, `num_hw_cqs` 1–2. Return CPU-visible results.
+`l1_small_size` 0–128 KiB, `num_command_queues` 1–2. Return CPU-visible results.
+During calls, PyTorch learned ops on the host CPU are rejected; host matmuls
+pass only when no operand carries model weights (e.g. RoPE angles from positions).
 
 Evaluation selects `bf16` (default), `fp32`, `fp16`, or `bfp8_b` explicitly and
 passes it to the factory. Declare actual dominant weight/activation formats,
@@ -76,11 +78,10 @@ requests and results. Short-test success and exact FP32 token agreement are
 separate fields; retain any token disagreement.
 
 The run sandbox mounts the controller's public `/models.json` registry and
-`/models.py` read-only, plus prepared `/input` files and routed `/weights`.
+`/portforge_models.py` read-only, plus prepared `/input` files and routed `/weights`.
 Inspect these with a bounded `port_run` before assuming a metadata schema.
-Legacy 600M version-1 suites identify repo/revision/weight hash without a
-checkpoint receipt, model key or manifest hash. Version-2 suites for larger
-models include those fields and `/input/checkpoint_receipt.json`. Registry
+Every suite (version 2) carries the model key and manifest hash, with
+`/input/checkpoint_receipt.json` beside it. Registry
 entries contain official file hashes/sizes and architecture constraints.
 The staged `/input/config.json` is serialized from the loaded HF configuration;
 its bytes may differ from the official config. File-backed 600M routing mounts

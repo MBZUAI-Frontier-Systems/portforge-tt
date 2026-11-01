@@ -1,5 +1,10 @@
 """Trusted evaluator for the Kyutai Pocket TTS (CALM) port to Tenstorrent.
 
+The shared scaffold is portforge_eval's evaluator kit; this file holds what is
+specific to Pocket TTS: the suites, the gated checkpoint, the official
+implementation as the oracle, the backend's generate()/predict_latent() calls
+and the autoregressive gates.
+
 Public inputs per case: prepared text token ids, the frozen noise pool rows the
 sampler must consume (one row per generated frame, in order), per-voice
 precomputed ModelState KV caches from the released voice-embedding files, and
@@ -25,22 +30,21 @@ Reference policy notes (declared, reviewable):
     loop (init_states, _expand_kv_cache, _run_flow_lm_and_increment_step) with
     the same pool; both passes must consume the same number of rows.
 """
-import argparse
 import contextlib
 import copy
 import hashlib
-import importlib
 import json
 import math
 import os
 import re
-from pathlib import Path
-import resource
-import socket
-import statistics
 import sys
 import time
-from models import model_spec, verify_checkpoint
+from pathlib import Path
+
+import portforge_eval
+from portforge_eval import (Progress, check_suite, reference_execution, suite_hash,  # noqa: F401
+                            validate_input_preservation, validate_receipt, write_json)
+from portforge_models import model_spec, verify_checkpoint
 
 MODEL = "kyutai/pocket-tts"
 REVISION = "7f364c05d1be3faf2b234cdbe4cbb68a026d4218"
@@ -177,11 +181,6 @@ mimi:
     output_dimension: 512
 """
 
-import portforge_eval
-from portforge_eval import (Progress, check_suite, reference_execution, suite_hash,  # noqa: E402,F401
-                            validate_config, validate_input_preservation, validate_receipt,
-                            verify_weights, write_json)
-
 
 def model_identity(name=KEY):
     return portforge_eval.model_identity(name)
@@ -189,14 +188,6 @@ def model_identity(name=KEY):
 
 def suite_model(spec):
     return portforge_eval.suite_model(spec, KEY, GATES)
-
-
-def validate_artifact(artifact, spec, identity):
-    return portforge_eval.validate_artifact(artifact, spec, identity, TIMING_PROTOCOL)
-
-
-def require_tt_precision(mode, runtime):
-    return portforge_eval.require_tt_precision(mode, runtime, PRECISIONS)
 
 
 def validate_precision(mode, policy, runtime=None):
@@ -209,11 +200,11 @@ def make_suite(corpus, stage, model=KEY):
     selected, model_fields = model_spec(model), model_identity(model)
     identity = hashlib.sha256(json.dumps(corpus, sort_keys=True, separators=(",", ":"),
                                           allow_nan=False).encode()).hexdigest()
-    if identity != CORPUS_SHA256 or stage not in ("smoke", "bringup", "full"):
+    if identity != CORPUS_SHA256 or stage not in portforge_eval.STAGES:
         raise ValueError("unrecognized corpus or stage")
     entries = {entry["name"]: entry for entry in corpus["cases"]}
     cases, labels = [], {}
-    anchors = list(ANCHOR_FRAMES) if stage in ("smoke", "bringup") else []
+    anchors = list(ANCHOR_FRAMES) if stage in ("smoke", "bringup", "perf") else []
 
     def add(name, key, numerical=True, **extra):
         entry = entries[key]
@@ -225,7 +216,7 @@ def make_suite(corpus, stage, model=KEY):
 
     if stage == "smoke":
         add("short", corpus["selection"]["smoke"])
-    elif stage == "bringup":
+    elif stage in ("bringup", "perf"):
         pick = corpus["selection"]["bringup"]
         add("short", pick["short"])
         add("long", pick["long"])
@@ -248,7 +239,7 @@ def make_suite(corpus, stage, model=KEY):
                 weight_sha256=selected["files"][selected["weight_files"][0]]["sha256"],
                 corpus_sha256=CORPUS_SHA256, sample_rate=SAMPLE_RATE, frame_rate=FRAME_RATE,
                 latent_dim=LATENT_DIM, voices=list(VOICES), anchor_frames=list(ANCHOR_FRAMES),
-                gates=GATES.copy(), timed_repeats=3 if stage == "full" else 1, cases=cases)
+                gates=GATES.copy(), timed_repeats=portforge_eval.stage_repeats(stage), **portforge_eval.perf_fields(stage), cases=cases)
     return check_suite(spec), labels
 
 
@@ -615,168 +606,117 @@ def run_case(model, voice_state, text, prepared, frames_after_eos, noise, want_a
 
 
 def reference(args):
-    execution = reference_execution()
+    """Reference host: the official TTSModel's latents, EOS frame and audio (FP32 oracle or benchmark).
+
+    The gated checkpoint, the voice-state export and the pooled-noise replay are this pack's own;
+    run_case's audio may differ by ~1e-6 between identical runs (see below), so only latents and EOS
+    go through run.time's exact repeat check and the audio is compared with a tolerance here.
+    """
     import numpy as np
-    import torch
-    torch.manual_seed(1729)
-    benchmark = getattr(args, "command", "reference") == "reference-benchmark"
-    precision = args.precision if benchmark else "fp32"
-    if not benchmark and precision != "fp32":
+    run = portforge_eval.ReferenceRun(args, sys.modules[__name__])
+    if not run.benchmark and run.precision != "fp32":
         raise ValueError("the immutable correctness oracle is FP32")
-    if precision not in ("fp32", "bf16"):
-        raise ValueError("the pocket-tts reference exposes float32/bfloat16 only")
-    root = Path(args.output if benchmark else args.out)
-    root.mkdir(parents=True, exist_ok=True)
-    if benchmark:
-        public, private = Path(args.input), Path(args.oracle)
-        oracle_meta = json.loads((private / "reference.json").read_text())
-        if oracle_meta.get("precision", {}).get("requested", "fp32") != "fp32":
-            raise ValueError("precision comparisons require the fixed FP32 oracle")
-        spec = json.loads((public / "suite.json").read_text())
-        if spec["stage"] not in ("smoke", "bringup"):
-            raise ValueError("precision benchmark is diagnostic: use smoke or bringup inputs")
-        prepared_inputs = np.load(public / "inputs.npz", allow_pickle=False)
-        selected, identity = suite_model(spec)
-        validate_artifact(oracle_meta, spec, identity)
-        validate_config(json.loads((public / "config.json").read_text()), selected)
-        validate_receipt(oracle_meta.get("checkpoint_receipt", {}), identity, selected, spec)
-        corpus = None
-    else:
-        public, private = root / "input", root / "oracle"
-        public.mkdir(exist_ok=True)
-        private.mkdir(exist_ok=True)
-        corpus = json.loads(Path(args.corpus).read_text())
-        spec, labels = make_suite(corpus, args.stage, getattr(args, "model", KEY))
-        selected, identity = suite_model(spec)
-    progress = Progress(root, spec["stage"])
-    progress.mark("prepare_checkpoint", initializing=True)
-    started = time.perf_counter()
-    checkpoint = root / "checkpoint"
-    receipt = prepare_checkpoint(checkpoint)
-    receipt["model_manifest_sha256"] = identity["model_manifest_sha256"]
-    progress.mark("load_model", initializing=True)
-    if torch.cuda.is_available():
-        torch.backends.cuda.matmul.allow_tf32 = False
-        torch.backends.cudnn.allow_tf32 = False
-        torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = False
-        torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = False
-        device = "cuda"
-        if precision == "bf16" and not torch.cuda.is_bf16_supported(including_emulation=False):
-            raise RuntimeError("this CUDA device lacks native BF16 support")
-    else:
-        device = "cpu"
-    model = load_tts(checkpoint, device, precision)
+    torch, device = run.torch()
+    run.progress.mark("prepare_checkpoint", initializing=True)
+    run.started = time.perf_counter()
+    checkpoint = run.root / "checkpoint"
+    run.receipt = prepare_checkpoint(checkpoint)
+    run.receipt["model_manifest_sha256"] = run.identity["model_manifest_sha256"]
+    run.progress.mark("load_model", initializing=True)
+    model = load_tts(checkpoint, device, run.precision)
     voices = voice_states(model, checkpoint)
-    validate_config(json.loads((checkpoint / "config.json").read_text()), selected)
-    if not benchmark:
-        (public / "config.json").write_text((checkpoint / "config.json").read_text())
-    meta = dict(load_seconds=time.perf_counter() - started, device=device,
-                gpu=torch.cuda.get_device_name(0) if device == "cuda" else None,
-                hostname=socket.gethostname(), execution=execution, job_id=os.getenv("SLURM_JOB_ID"),
-                torch_version=torch.__version__, **identity, checkpoint_receipt=receipt,
-                verified_weight_files=receipt["verified_files"], timing_protocol=TIMING_PROTOCOL,
-                parameter_dtypes=[{"fp32": "float32", "bf16": "bfloat16"}[precision]],
-                precision=validate_precision(precision, dict(mode=precision, weights=precision,
-                    activations=precision, accumulation=f"PyTorch {device} operator-dependent; no autocast",
-                    exceptions=[])),
-                policy=dict(noise="frozen public pool rows fed via torch.nn.init.normal_ patch, frame order",
-                            latents="official autoregressive loop replay over the same pool",
-                            audio="official TTSModel.generate_audio, first 5 ms faded in as upstream"),
-                cases=[])
-    inputs, expected = {}, {}
-    if not benchmark:
+    run.publish_config((checkpoint / "config.json").read_text())
+    run.loaded(parameter_dtypes=[{"fp32": "float32", "bf16": "bfloat16"}[run.precision]],
+               policy=dict(noise="frozen public pool rows fed via torch.nn.init.normal_ patch, frame order",
+                           latents="official autoregressive loop replay over the same pool",
+                           audio="official TTSModel.generate_audio, first 5 ms faded in as upstream"))
+    if run.benchmark:
+        prepared_inputs = np.load(run.public / "inputs.npz", allow_pickle=False)
+    else:
         for name in VOICES:
             for flat, array in export_voice_state(voices[name]).items():
-                inputs[f"voice__{name}__{flat}"] = array
+                run.inputs[f"voice__{name}__{flat}"] = array
+        entries = {c["name"]: c for c in run.corpus["cases"]}
     with torch.no_grad():
-        for case in spec["cases"]:
-            name = case["name"]
-            progress.mark("case_begin", name)
-            if not benchmark:
-                entry = {c["name"]: c for c in corpus["cases"]}[case["clip"]]
+        for case in run.cases():
+            arrays = run.prepared(case)
+            if arrays is None:
+                entry = entries[case["clip"]]
                 prepared, frames_after_eos = prepare_case_text(model, entry["text"])
                 text, tokens = entry["text"], int(prepared.shape[1])
                 noise = case_noise(case["clip"], CORPUS_SHA256, max_frames_for(tokens) + 8)
                 voice = voices[case["voice"]]
             else:
-                tokens_tensor = torch.from_numpy(
-                    prepared_inputs[name + "__text_tokens"].copy()).long().reshape(1, -1).to(device)
-                text = str(prepared_inputs[name + "__text"])
-                prepared, frames_after_eos = tokens_tensor, int(prepared_inputs[name + "__frames_after_eos"])
-                noise = prepared_inputs[name + "__noise"].copy()
+                prepared = torch.from_numpy(arrays["text_tokens"]).long().reshape(1, -1).to(device)
+                text, frames_after_eos = str(arrays["text"]), int(arrays["frames_after_eos"])
+                noise = arrays["noise"]
                 voice = import_voice_state(
                     {k.split("__", 2)[2]: v for k, v in prepared_inputs.items()
                      if k.startswith("voice__" + case["voice"] + "__")}, device)
                 voice = match_state_dtype(voice, model)
-            first_latents, first_eos, first_audio = None, None, None
-            samples, cold = [], None
-            for repeat in range((spec["timed_repeats"] if case["numerical"] else 1) + 1):
-                progress.mark("generate", name, repeat)
-                start = time.perf_counter()
-                latents, eos_frame, audio = run_case(model, voice, text, prepared,
-                                                     frames_after_eos, noise)
-                if device == "cuda":
-                    torch.cuda.synchronize()
-                elapsed = time.perf_counter() - start
-                if first_latents is None:
-                    first_latents, first_eos, first_audio, cold = latents, eos_frame, audio, elapsed
-                else:
-                    # Latents and EOS are bit-deterministic on the fixed noise pool. The
-                    # official decoder thread batches frames by wall-clock timing, so its
-                    # audio may reassociate floats at the ~1e-6 level between identical runs.
-                    if not (np.array_equal(first_latents, latents) and first_eos == eos_frame
-                            and np.allclose(first_audio, audio, rtol=0.0, atol=1e-4)):
-                        raise ValueError("reference nondeterminism")
-                    samples.append(elapsed)
-            latents, eos_frame, audio = first_latents, first_eos, first_audio
-            expected.update({name + "__latents": latents,
-                             name + "__eos_frame": np.int64(eos_frame),
-                             name + "__audio": audio})
-            meta["cases"].append(dict(name=name, seconds=samples, first_seconds=cold,
-                                      audio_seconds=(len(audio) / SAMPLE_RATE if audio is not None else None),
-                                      frames=len(latents), eos_frame=int(eos_frame),
-                                      text_tokens=int(prepared.shape[1])))
-            if benchmark:
+            results = []
+
+            def generate():
+                results.append(run_case(model, voice, text, prepared, frames_after_eos, noise))
+                return results[-1]
+
+            outputs = run.time(case, generate, lambda result: {"latents": result[0],
+                                                               "eos_frame": np.int64(result[1])})
+            # Latents and EOS are bit-deterministic on the fixed noise pool. The
+            # official decoder thread batches frames by wall-clock timing, so its
+            # audio may reassociate floats at the ~1e-6 level between identical runs.
+            audio = results[0][2]
+            if any(not np.allclose(audio, other, rtol=0.0, atol=1e-4) for _, _, other in results[1:]):
+                raise ValueError("reference nondeterminism")
+            latents, eos_frame = outputs["latents"], int(outputs["eos_frame"])
+            outputs["audio"] = audio
+            run.meta["cases"][-1].update(audio_seconds=(len(audio) / SAMPLE_RATE if audio is not None else None),
+                                         frames=len(latents), eos_frame=eos_frame,
+                                         text_tokens=int(prepared.shape[1]))
+            if run.benchmark:
                 # The benchmark's own replay is its anchor prediction (same computation).
-                for key in prepared_inputs.files:
-                    if key.startswith(name + "__anchor_"):
-                        t = int(key.rsplit("_", 1)[1])
-                        expected[key] = latents[t].copy()
+                for key in arrays:
+                    if key.startswith("anchor_"):
+                        outputs[key] = latents[int(key.rsplit("_", 1)[1])].copy()
+                run.record(case, None, outputs)
                 continue
-            inputs.update({name + "__text_tokens": prepared[0].long().cpu().numpy(),
-                           name + "__text": np.array(entry["text"]),
-                           name + "__frames_after_eos": np.int64(frames_after_eos),
-                           name + "__max_frames": np.int64(max_frames_for(tokens)),
-                           name + "__noise": noise})
+            inputs = {"text_tokens": prepared[0].long().cpu().numpy(), "text": np.array(entry["text"]),
+                      "frames_after_eos": np.int64(frames_after_eos), "max_frames": np.int64(max_frames_for(tokens)),
+                      "noise": noise}
             for t in case["anchors"]:
                 if t < len(latents):
-                    inputs[f"{name}__anchor_{t}"] = latents[:t].copy()
-            progress.mark("case_complete", name)
-    progress.mark("write_outputs")
-    meta["host_peak_rss_bytes"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
-    meta["suite_sha256"] = receipt["suite_sha256"] = suite_hash(spec)
-    if benchmark:
-        np.savez_compressed(root / "actual.npz", **expected)
-        write_json(root / "measurements.json", meta)
-        result = assess(args)
-        write_json(root / "verdict.json", result)
-        progress.mark("complete")
-        return result
-    np.savez_compressed(public / "inputs.npz", **inputs)
-    np.savez_compressed(private / "oracle.npz", **expected)
-    write_json(public / "suite.json", spec)
-    write_json(public / "checkpoint_receipt.json", receipt)
-    write_json(private / "labels.json", labels)
-    write_json(private / "reference.json", meta)
-    progress.mark("complete")
+                    inputs[f"anchor_{t}"] = latents[:t].copy()
+            run.record(case, inputs, outputs)
+    return run.finish()
 
 
-# ----------------------------------------------------------------- candidate
+# Candidate (TT sandbox): portforge_eval.run_candidate times forward_case; probe_case runs the
+# teacher-forced anchors once per case, untimed.
+# Learned ops that never run on the host CPU. Host matmuls are allowed only without
+# model weights (portforge_eval.HostComputeGuard), e.g. RoPE angles from positions.
+FORBIDDEN_HOST_OPS = ("aten.embedding.", "aten.native_layer_norm.", "aten.layer_norm.", "aten._softmax.",
+                      "aten.softmax.", "aten.gelu.", "aten.silu.", "aten.scaled_dot_product",
+                      "aten.conv1d.", "aten.conv2d.", "aten.conv_transpose1d.", "aten.convolution.")
+ROWS = None  # batch 1: one item per case
 
-def forward_case(backend, case, case_inputs, voice):
-    """Run the agent's backend for one case; returns outputs and supplied inputs."""
+
+def case_inputs(inputs, case, spec):
+    """The case's arrays plus its voice's ModelState arrays under "voice.<flat name>" keys."""
+    prefix = "voice__" + case["voice"] + "__"
+    voice = {"voice." + key[len(prefix):]: inputs[key] for key in inputs.files if key.startswith(prefix)}
+    return {**portforge_eval.case_arrays(inputs, case), **voice}
+
+
+def supply(inputs):
+    """Copies for the backend (mutation is detected against the originals) and its voice dict."""
+    supplied = {key: value.copy() for key, value in inputs.items()}
+    return supplied, {key[len("voice."):]: value for key, value in supplied.items() if key.startswith("voice.")}
+
+
+def forward_case(backend, case, inputs, spec, config):
+    """One timed generation: tokens + voice + noise -> latents, EOS frame and audio."""
     import numpy as np
-    supplied = {key: value.copy() for key, value in case_inputs.items()}
+    supplied, voice = supply(inputs)
     outputs = backend.generate(supplied["text_tokens"], voice, supplied["noise"],
                                int(supplied["frames_after_eos"]), int(supplied["max_frames"]))
     latents = np.asarray(outputs["latents"], dtype=np.float32)
@@ -791,8 +731,15 @@ def forward_case(backend, case, case_inputs, voice):
     rendered = len(latents) * SAMPLES_PER_FRAME - (SAMPLES_PER_FRAME if eos != -1 else 0)
     if abs(len(audio) - rendered) > 192:
         raise ValueError("audio length must match the rendered latent frames")
-    arrays = {"latents": latents, "eos_frame": np.int64(eos), "audio": audio}
-    for key in sorted(k for k in case_inputs if k.startswith("anchor_")):
+    return {"latents": latents, "eos_frame": np.int64(eos), "audio": audio}, supplied
+
+
+def probe_case(backend, case, inputs, spec, config):
+    """Teacher-forced anchors (development stages): the next latent after each oracle prefix."""
+    import numpy as np
+    supplied, voice = supply(inputs)
+    arrays = {}
+    for key in sorted(k for k in inputs if k.startswith("anchor_")):
         t = int(key.rsplit("_", 1)[1])
         # noise[0] is consumed by the text prefill (drawn and discarded, as the
         # official forward always samples); latent f is produced by noise[f + 1].
@@ -806,107 +753,7 @@ def forward_case(backend, case, case_inputs, voice):
 
 
 def candidate(args):
-    public, out = Path(args.input), Path(args.output)
-    out.mkdir(parents=True, exist_ok=True)
-    spec = json.loads((public / "suite.json").read_text())
-    selected, identity = suite_model(spec)
-    config = json.loads((public / "config.json").read_text())
-    validate_config(config, selected)
-    progress = Progress(out, spec["stage"])
-    progress.mark("verify_checkpoint", initializing=True)
-    validate_receipt(json.loads((public / "checkpoint_receipt.json").read_text()), identity, selected, spec)
-    verified = verify_weights(args.weights, identity["model_key"])
-    progress.mark("import_runtime", initializing=True)
-    import numpy as np
-    import torch  # noqa: F401  (CPU weight conversion helpers on the TT host)
-    import ttnn
-    from torch.utils._python_dispatch import TorchDispatchMode
-    require_tt_precision(args.precision, ttnn)
-
-    class RejectCPUCompute(TorchDispatchMode):
-        def __torch_dispatch__(self, func, types, args=(), kwargs=None):
-            if str(func).startswith(("aten.mm.", "aten.bmm.", "aten.addmm.", "aten.matmul.", "aten.linear.",
-                "aten.embedding.", "aten.native_layer_norm.", "aten.layer_norm.", "aten._softmax.",
-                "aten.softmax.", "aten.gelu.", "aten.silu.", "aten.scaled_dot_product", "aten.conv1d.",
-                "aten.conv2d.", "aten.conv_transpose1d.", "aten.convolution.")):
-                raise RuntimeError("CPU learned compute forbidden: " + str(func))
-            return func(*args, **(kwargs or {}))
-
-    calls = [0]
-    for name in ("matmul", "linear", "embedding", "layer_norm", "conv1d", "conv2d", "execute_trace"):
-        original = getattr(ttnn, name, None)
-        if original:
-            def counted(*a, _name=name, _op=original, **kw):
-                calls[0] += 1
-                return _op(*a, **kw)
-            setattr(ttnn, name, counted)
-    sys.path.insert(0, os.getcwd())
-    backend_module = importlib.import_module("backend")
-    options = getattr(backend_module, "DEVICE_OPTIONS", {})
-    bounds = {"trace_region_size": (0, 128 * 1024 ** 2), "l1_small_size": (0, 128 * 1024), "num_hw_cqs": (1, 2)}
-    if not isinstance(options, dict) or set(options) - set(bounds) or any(type(v) is not int or not bounds[k][0] <= v <= bounds[k][1] for k, v in options.items()):
-        raise ValueError("invalid DEVICE_OPTIONS")
-    inputs = np.load(public / "inputs.npz", allow_pickle=False)
-    voices = {}
-    for name in spec["voices"]:
-        voices[name] = {k.split("__", 2)[2]: v for k, v in inputs.items()
-                        if k.startswith("voice__" + name + "__")}
-    arrays, measured = {}, dict(cases=[], device_options=options,
-        **identity, suite_sha256=suite_hash(spec), timing_protocol=TIMING_PROTOCOL, verified_weight_files=verified)
-    progress.mark("open_device", initializing=True)
-    device = ttnn.open_device(device_id=0, **options)
-    try:
-        progress.mark("create_backend", initializing=True)
-        start = time.perf_counter()
-        backend = backend_module.create_backend(args.weights, config, device,
-                                                precision=args.precision)
-        measured["precision"] = validate_precision(args.precision, getattr(backend, "precision_policy", None), ttnn)
-        progress.mark("load_synchronize", initializing=True)
-        ttnn.synchronize_device(device)
-        measured["load_seconds"] = time.perf_counter() - start
-        view = ttnn.device.get_memory_view(device, ttnn.BufferType.DRAM)
-        measured["resident_dram_bytes"] = int(view.num_banks) * int(view.total_bytes_allocated_per_bank)
-        measured["trace_reserved_bytes"] = int(view.num_banks) * options.get("trace_region_size", 0)
-        for case in spec["cases"]:
-            name = case["name"]
-            progress.mark("case_begin", name)
-            case_inputs = {key.split("__", 1)[1]: inputs[key] for key in inputs.files
-                           if key.startswith(name + "__")}
-            voice = voices[case["voice"]]
-            supplied_voice = {k: v.copy() for k, v in voice.items()}
-            originals = {**case_inputs, **voice}
-            first, samples, cold = None, [], None
-            for repeat in range((spec["timed_repeats"] if case["numerical"] else 1) + 1):
-                progress.mark("forward", name, repeat)
-                ttnn.synchronize_device(device)
-                before, start = calls[0], time.perf_counter()
-                with RejectCPUCompute():
-                    outputs, supplied = forward_case(backend, case, case_inputs, supplied_voice)
-                progress.mark("forward_synchronize", name, repeat)
-                start = time.perf_counter()
-                ttnn.synchronize_device(device)
-                elapsed = time.perf_counter() - start
-                validate_input_preservation(originals, {**supplied, **supplied_voice})
-                if calls[0] == before:
-                    raise ValueError("missing TT compute")
-                if first is None:
-                    first, cold = {k: np.array(v) for k, v in outputs.items()}, elapsed
-                elif any(not np.array_equal(first[k], np.asarray(v)) for k, v in outputs.items()):
-                    raise ValueError("TT nondeterminism")
-                else:
-                    samples.append(elapsed)
-            arrays.update({name + "__" + key: value for key, value in first.items()})
-            measured["cases"].append(dict(name=name, seconds=samples, first_seconds=cold))
-            progress.mark("case_complete", name)
-        progress.mark("write_outputs")
-        np.savez_compressed(out / "actual.npz", **arrays)
-        measured.update(host_peak_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024,
-                        observed_tt_calls=calls[0], memory_scope="resident allocator snapshot, not peak")
-        write_json(out / "measurements.json", measured)
-    finally:
-        progress.mark("close_device")
-        ttnn.close_device(device)
-    progress.mark("complete")
+    return portforge_eval.run_candidate(args, sys.modules[__name__])
 
 
 # -------------------------------------------------------------------- assess
@@ -933,178 +780,115 @@ def transcribe(audios):
     return texts
 
 
+def output_keys(case, spec):
+    """The arrays the oracle holds per case; the candidate adds its anchor predictions."""
+    return ("latents", "eos_frame", "audio")
+
+
+def check_case(check, case, a):
+    name, actual, tol = case["name"], a.actual, GATES["eos_frame_tolerance"]
+    latents = actual[name + "__latents"]
+    eos = int(actual[name + "__eos_frame"])
+    audio = actual[name + "__audio"]
+    o_latents = a.expected[name + "__latents"]
+    o_eos = int(a.expected[name + "__eos_frame"])
+    o_audio = a.expected[name + "__audio"]
+    if latents.dtype.kind != "f" or audio.dtype.kind != "f":
+        raise ValueError("latents/audio must be floating point")
+    check["frames"], check["reference_frames"] = len(latents), len(o_latents)
+    check["eos_frame"], check["reference_eos_frame"] = eos, o_eos
+    if -1 in (eos, o_eos):
+        if eos != o_eos:
+            raise ValueError(f"EOS runaway: candidate {eos} vs oracle {o_eos} (tolerance {tol})")
+    elif abs(eos - o_eos) > tol:
+        raise ValueError(f"EOS frame differs by {abs(eos - o_eos)} > {tol}")
+    common = min(len(latents), len(o_latents))
+    if common < 4:
+        raise ValueError("no meaningful latent overlap")
+    error = max_row_nrmse(latents[:common], o_latents[:common])
+    check["free_run_max_row_nrmse"] = error
+    if error > GATES["free_run_nrmse"]:
+        raise ValueError(f"free-run latent NRMSE exceeds {GATES['free_run_nrmse']}")
+    ratio = min(len(audio), len(o_audio)) / max(1, max(len(audio), len(o_audio)))
+    check["audio_length_ratio"] = ratio
+    if ratio < 0.85:
+        raise ValueError("audio length ratio below 0.85")
+    mel_error = audio_mel_nrmse(audio, o_audio)
+    check["audio_mel_nrmse"] = mel_error
+    if mel_error > GATES["audio_mel_nrmse"]:
+        raise ValueError(f"audio mel NRMSE exceeds {GATES['audio_mel_nrmse']}")
+    worst = None
+    for key in a.notes["anchors"].get(name, []):
+        t = int(key.rsplit("_", 1)[1])
+        if key not in actual or t >= len(o_latents):
+            raise ValueError("missing anchor prediction")
+        error = max_row_nrmse(actual[key].reshape(1, -1), o_latents[t].reshape(1, -1))
+        worst = error if worst is None else max(worst, error)
+    if worst is not None:
+        check["anchor_max_row_nrmse"] = worst
+        if worst > GATES["nrmse"]:
+            raise ValueError(f"teacher-forced anchor NRMSE exceeds {GATES['nrmse']}")
+    if "compare_to" in case:
+        base = actual[case["compare_to"] + "__latents"]
+        common = min(len(latents), len(base))
+        error = max_row_nrmse(latents[:common], base[:common])
+        check["revisit_max_row_nrmse"] = error
+        if (error > GATES["behavior_max_nrmse"]
+                or int(actual[case["compare_to"] + "__eos_frame"]) != eos):
+            raise ValueError("revisit changed semantics")
+    a.timing(check, case)
+    audio_seconds = len(audio) / SAMPLE_RATE
+    check.update(audio_seconds=audio_seconds, real_time_factor=audio_seconds / check["p50_seconds"])
+
+
+def quality(a):
+    """Full stage: WER of the scoring ASR on candidate audio, relative to the same scoring of the oracle's."""
+    labels, quality = a.labels(), {}
+    for case in a.spec["cases"]:
+        if not case.get("quality") or case.get("compare_to"):
+            continue
+        name = case["name"]
+        try:
+            cand_text, ref_text = transcribe([a.actual[name + "__audio"], a.expected[name + "__audio"]])
+        except Exception as exc:  # assessor environment issue, not a pass
+            a.failures.append(name + ": scoring ASR failed (" + str(exc)[:120] + ")")
+            continue
+        try:
+            candidate_wer = word_error_rate(cand_text, labels[name])
+            reference_wer = word_error_rate(ref_text, labels[name])
+            if not math.isfinite(candidate_wer) or not math.isfinite(reference_wer):
+                raise ValueError("nonfinite WER")
+            inflation = candidate_wer - reference_wer
+            quality[name] = dict(wer=candidate_wer, reference_wer=reference_wer,
+                                 wer_inflation=inflation, hypothesis=cand_text,
+                                 reference_hypothesis=ref_text)
+            if inflation > GATES["max_wer_inflation"]:
+                a.failures.append(name + f": WER inflation exceeds {GATES['max_wer_inflation']:.0%}")
+        except (ValueError, TypeError, KeyError) as exc:
+            a.failures.append(name + ": " + str(exc))
+    return quality
+
+
+def verdict_fields(a):
+    """max_nrmse is the teacher-forced anchor error; the free-run error is reported beside it."""
+    def worst(field):
+        return max((c[field] for c in a.checks if c.get(field) is not None), default=None)
+    return dict(max_nrmse=worst("anchor_max_row_nrmse"), max_free_run_nrmse=worst("free_run_max_row_nrmse"))
+
+
+def candidate_keys(case, a):
+    """The candidate's anchor predictions, one per anchor prefix in inputs.npz, scored against oracle latent rows."""
+    anchors = a.notes.get("anchors")
+    if anchors is None:
+        anchors = a.notes["anchors"] = {}
+        for key in sorted(k for k in a.inputs.files if "__anchor_" in k):
+            anchors.setdefault(key.split("__")[0], []).append(key)
+    return anchors.get(case["name"], [])
+
+
 def assess(args):
-    import numpy as np
-    public, private, out = Path(args.input), Path(args.oracle), Path(args.output)
-    spec = json.loads((public / "suite.json").read_text())
-    selected, identity = suite_model(spec)
-    strict = spec.get("version", 1) >= 2
-    actual = np.load(out / "actual.npz", allow_pickle=False)
-    expected = np.load(private / "oracle.npz", allow_pickle=False)
-    measured = json.loads((out / "measurements.json").read_text())
-    public_inputs = np.load(public / "inputs.npz", allow_pickle=False) if strict else {}
-    measurements = {c["name"]: c for c in measured["cases"]}
-    failures, checks = [], []
-    if strict:
-        try:
-            validate_config(json.loads((public / "config.json").read_text()), selected)
-            validate_receipt(json.loads((public / "checkpoint_receipt.json").read_text()), identity, selected, spec)
-            validate_artifact(measured, spec, identity)
-            needed = [*selected["weight_files"], *([selected["weight_index"]] if selected["weight_index"] else [])]
-            verified = measured.get("verified_weight_files")
-            if not isinstance(verified, dict) or any(verified.get(k) != selected["files"][k] for k in needed):
-                raise ValueError("candidate weight verification identity mismatch")
-            reference_meta = json.loads((private / "reference.json").read_text())
-            validate_artifact(reference_meta, spec, identity)
-            validate_receipt(reference_meta.get("checkpoint_receipt", {}), identity, selected, spec)
-            if reference_meta.get("precision", {}).get("requested") != "fp32":
-                raise ValueError("correctness oracle must be FP32")
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            failures.append("identity: " + str(exc))
-    anchor_keys = sorted(k for k in public_inputs.files if "__anchor_" in k) if strict else []
-    per_case_anchor = {}
-    for key in anchor_keys:
-        per_case_anchor.setdefault(key.split("__")[0], []).append(key)
-    case_keys, keys = set(), set()
-    for case in spec["cases"]:
-        trio = {case["name"] + "__latents", case["name"] + "__eos_frame",
-                case["name"] + "__audio"}
-        case_keys |= trio          # the oracle always carries exactly these
-        keys |= trio | set(per_case_anchor.get(case["name"], []))
-    if strict and (set(actual.files) != keys or set(expected.files) != case_keys):
-        failures.append("missing/unexpected arrays")
-    tol = GATES["eos_frame_tolerance"]
-    for case in spec["cases"]:
-        name, check = case["name"], {"name": case["name"]}
-        try:
-            latents = actual[name + "__latents"]
-            eos = int(actual[name + "__eos_frame"])
-            audio = actual[name + "__audio"]
-            o_latents = expected[name + "__latents"]
-            o_eos = int(expected[name + "__eos_frame"])
-            o_audio = expected[name + "__audio"]
-            if latents.dtype.kind != "f" or audio.dtype.kind != "f":
-                raise ValueError("latents/audio must be floating point")
-            check["frames"], check["reference_frames"] = len(latents), len(o_latents)
-            check["eos_frame"], check["reference_eos_frame"] = eos, o_eos
-            if -1 in (eos, o_eos):
-                if eos != o_eos:
-                    raise ValueError(f"EOS runaway: candidate {eos} vs oracle {o_eos} (tolerance {tol})")
-            elif abs(eos - o_eos) > tol:
-                raise ValueError(f"EOS frame differs by {abs(eos - o_eos)} > {tol}")
-            common = min(len(latents), len(o_latents))
-            if common < 4:
-                raise ValueError("no meaningful latent overlap")
-            error = max_row_nrmse(latents[:common], o_latents[:common])
-            check["free_run_max_row_nrmse"] = error
-            if error > GATES["free_run_nrmse"]:
-                raise ValueError(f"free-run latent NRMSE exceeds {GATES['free_run_nrmse']}")
-            ratio = min(len(audio), len(o_audio)) / max(1, max(len(audio), len(o_audio)))
-            check["audio_length_ratio"] = ratio
-            if ratio < 0.85:
-                raise ValueError("audio length ratio below 0.85")
-            mel_error = audio_mel_nrmse(audio, o_audio)
-            check["audio_mel_nrmse"] = mel_error
-            if mel_error > GATES["audio_mel_nrmse"]:
-                raise ValueError(f"audio mel NRMSE exceeds {GATES['audio_mel_nrmse']}")
-            worst = None
-            for key in per_case_anchor.get(name, []):
-                t = int(key.rsplit("_", 1)[1])
-                if key not in actual or t >= len(o_latents):
-                    raise ValueError("missing anchor prediction")
-                error = max_row_nrmse(actual[key].reshape(1, -1), o_latents[t].reshape(1, -1))
-                worst = error if worst is None else max(worst, error)
-            if worst is not None:
-                check["anchor_max_row_nrmse"] = worst
-                if worst > GATES["nrmse"]:
-                    raise ValueError(f"teacher-forced anchor NRMSE exceeds {GATES['nrmse']}")
-            if "compare_to" in case:
-                base = actual[case["compare_to"] + "__latents"]
-                common = min(len(latents), len(base))
-                error = max_row_nrmse(latents[:common], base[:common])
-                check["revisit_max_row_nrmse"] = error
-                if (error > GATES["behavior_max_nrmse"]
-                        or int(actual[case["compare_to"] + "__eos_frame"]) != eos):
-                    raise ValueError("revisit changed semantics")
-            samples = measurements[name]["seconds"]
-            if not samples or any(type(x) not in (int, float) or not math.isfinite(x) or x <= 0 for x in samples):
-                raise ValueError("invalid timing samples")
-            if strict and len(samples) != (spec["timed_repeats"] if case["numerical"] else 1):
-                raise ValueError("timing repeat count disagrees with prepared suite")
-            cold = measurements[name].get("first_seconds")
-            if strict and (type(cold) not in (int, float) or not math.isfinite(cold) or cold <= 0):
-                raise ValueError("invalid first-call timing")
-            audio_seconds = len(audio) / SAMPLE_RATE
-            check.update(p50_seconds=statistics.median(samples), timing_samples=len(samples),
-                         seconds=samples, first_seconds=cold, audio_seconds=audio_seconds,
-                         real_time_factor=audio_seconds / statistics.median(samples))
-        except (KeyError, ValueError, IndexError, TypeError) as exc:
-            failures.append(name + ": " + str(exc))
-        checks.append(check)
-    quality = {}
-    if spec["stage"] == "full" and not failures:
-        labels = json.loads((private / "labels.json").read_text())
-        for case in spec["cases"]:
-            if not case.get("quality") or case.get("compare_to"):
-                continue
-            name = case["name"]
-            try:
-                cand_text, ref_text = transcribe([actual[name + "__audio"],
-                                                  expected[name + "__audio"]])
-            except Exception as exc:  # assessor environment issue, not a pass
-                failures.append(name + ": scoring ASR failed (" + str(exc)[:120] + ")")
-                continue
-            try:
-                candidate_wer = word_error_rate(cand_text, labels[name])
-                reference_wer = word_error_rate(ref_text, labels[name])
-                if not math.isfinite(candidate_wer) or not math.isfinite(reference_wer):
-                    raise ValueError("nonfinite WER")
-                inflation = candidate_wer - reference_wer
-                quality[name] = dict(wer=candidate_wer, reference_wer=reference_wer,
-                                     wer_inflation=inflation, hypothesis=cand_text,
-                                     reference_hypothesis=ref_text)
-                if inflation > GATES["max_wer_inflation"]:
-                    failures.append(name + f": WER inflation exceeds {GATES['max_wer_inflation']:.0%}")
-            except (ValueError, TypeError, KeyError) as exc:
-                failures.append(name + ": " + str(exc))
-    errors = [c.get("free_run_max_row_nrmse") for c in checks if c.get("free_run_max_row_nrmse") is not None]
-    anchor_errors = [c.get("anchor_max_row_nrmse") for c in checks if c.get("anchor_max_row_nrmse") is not None]
-    timings = [c["p50_seconds"] for c in checks if "p50_seconds" in c]
-    verdict = dict(stage=spec["stage"], **identity, suite_sha256=suite_hash(spec),
-                   timing_protocol=TIMING_PROTOCOL,
-                   passed=not failures, accepted=not failures and spec["stage"] == "full",
-                   failures=failures, case_count=len(checks),
-                   max_nrmse=max(anchor_errors, default=None),
-                   max_free_run_nrmse=max(errors, default=None),
-                   timing={"median_case_p50_seconds": statistics.median(timings) if timings else None,
-                           "measured_cases": len(timings)},
-                   precision=measured.get("precision"), checks=checks, quality=quality,
-                   production_certified=False)
-    write_json(out / "verdict.json", verdict)
-    return verdict
+    return portforge_eval.run_assess(args, sys.modules[__name__])
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__)
-    sub = parser.add_subparsers(dest="command", required=True)
-    ref = sub.add_parser("reference")
-    ref.add_argument("--stage", choices=("smoke", "bringup", "full"), required=True)
-    ref.add_argument("--model", default=KEY, choices=(KEY,))
-    for flag in ("corpus", "out"):
-        ref.add_argument("--" + flag, required=True)
-    for command, flags in (("candidate", ("input", "output", "weights")), ("assess", ("input", "oracle", "output")),
-                           ("reference-benchmark", ("input", "oracle", "output"))):
-        child = sub.add_parser(command)
-        for flag in flags:
-            child.add_argument("--" + flag, required=True)
-        if command != "assess":
-            child.add_argument("--precision", choices=PRECISIONS if command == "candidate" else ("fp32", "bf16"),
-                               default="bf16")
-        if command == "reference-benchmark":
-            child.add_argument("--model", choices=(KEY,))
-    args = parser.parse_args()
-    result = {"reference": reference, "reference-benchmark": reference, "candidate": candidate,
-              "assess": assess}[args.command](args)
-    if args.command in ("assess", "reference-benchmark"):
-        print(json.dumps({k: v for k, v in result.items() if k != "checks"}))
-        sys.exit(0 if result["passed"] else 1)
+    portforge_eval.main(sys.modules[__name__])
