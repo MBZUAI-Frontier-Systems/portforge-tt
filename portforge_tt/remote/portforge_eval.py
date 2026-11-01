@@ -417,8 +417,9 @@ _PROFILED = []
 def profile_device(device):
     """Register the opened device so profile jobs drain its profiler at every case boundary.
 
-    TT-Metal's device profiler holds about 1000 programs and drops markers past that
-    (Tracy's report then fails); it drains only on an explicit ReadDeviceProfiler.
+    TT-Metal's device profiler holds a fixed number of programs (the runner raises it to
+    PROFILE_PROGRAMS for profile jobs) and drops markers past that (Tracy's report then
+    fails); it drains only on an explicit ReadDeviceProfiler.
     """
     if os.getenv("PORTFORGE_PROFILE") == "1":
         _PROFILED.append(device)
@@ -565,9 +566,23 @@ class Progress:
 # is the worked example. The four entry points a pack exposes stay thin:
 #
 #   def reference(args):  ...uses ReferenceRun...
-#   def candidate(args):  return portforge_eval.run_candidate(args, sys.modules[__name__])
-#   def assess(args):     return portforge_eval.run_assess(args, sys.modules[__name__])
-#   if __name__ == "__main__": portforge_eval.main(sys.modules[__name__])
+#   def candidate(args):  return portforge_eval.run_candidate(args, globals())
+#   def assess(args):     return portforge_eval.run_assess(args, globals())
+#   if __name__ == "__main__": portforge_eval.main(globals())
+#
+# Packs pass globals(), not sys.modules[__name__]: under `python -m tracy` (port_profile) the script
+# runs inside tracy's own __main__ module.
+
+class Pack:
+    """A pack's evaluate.py namespace (its globals()), read live as attributes."""
+
+    def __init__(self, namespace):
+        self.__dict__ = namespace
+
+
+def as_pack(pack):
+    return Pack(pack) if isinstance(pack, dict) else pack
+
 
 # ttnn entry points counted as TT compute; a timed call that reaches none of them fails.
 TT_COMPUTE_OPS = ("matmul", "linear", "embedding", "layer_norm", "conv1d", "conv2d", "execute_trace")
@@ -611,6 +626,7 @@ def run_candidate(args, pack):
                            encoder states and logits), synchronised and checked the same way
       case_inputs(inputs, case, spec) -> dict    default: case_arrays(inputs, case)
     """
+    pack = as_pack(pack)
     import importlib
     import resource
     import sys
@@ -823,6 +839,7 @@ def run_assess(args, pack):
                            a.failures when a quality gate fails
       verdict_fields(a) -> dict   extra verdict fields (e.g. its own max_nrmse)
     """
+    pack = as_pack(pack)
     a = Assessment(args, pack)
     spec = a.spec
     extra = getattr(pack, "candidate_keys", None)
@@ -866,6 +883,7 @@ class ReferenceRun:
     """
 
     def __init__(self, args, pack, precisions=("fp32", "bf16")):
+        pack = as_pack(pack)
         self.execution = reference_execution()
         self.pack, self.args = pack, args
         self.benchmark = getattr(args, "command", "reference") == "reference-benchmark"
@@ -1033,6 +1051,7 @@ class ReferenceRun:
 
 def main(pack):
     """The evaluate.py command line every pack shares; the TT runner and the reference jobs call it."""
+    pack = as_pack(pack)
     import argparse
     import sys
     parser = argparse.ArgumentParser(description=pack.__doc__)

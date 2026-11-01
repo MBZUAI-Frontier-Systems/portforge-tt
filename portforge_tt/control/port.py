@@ -166,7 +166,17 @@ def pack_evaluator():
         return importlib.import_module('evaluate')
     except ImportError:
         pass
-    spec = importlib.util.spec_from_file_location('portforge_pack_evaluate', PORT['dir'] / 'evaluate.py')
+    return load_evaluator('portforge_pack_evaluate')
+
+
+def load_evaluator(name):
+    """Execute the pack's evaluate.py by path. Packs import the kit flat (as on remote hosts), so in
+    package mode the flat names point at this package's modules and share the registry."""
+    if __package__:
+        from ..remote import portforge_eval, portforge_models
+        sys.modules.setdefault('portforge_eval', portforge_eval)
+        sys.modules.setdefault('portforge_models', portforge_models)
+    spec = importlib.util.spec_from_file_location(name, PORT['dir'] / 'evaluate.py')
     evaluator = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(evaluator)
     return evaluator

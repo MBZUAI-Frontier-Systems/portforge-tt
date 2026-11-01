@@ -9,7 +9,6 @@ candidate imports the agent's backend.py in its current working directory.
 import hashlib
 import json
 import math
-import sys
 
 import portforge_eval
 from portforge_eval import (Progress, reference_execution, suite_hash, validate_config,  # noqa: F401
@@ -111,7 +110,7 @@ def reference(args):
     import torch
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required; CPU is not a reference compute substitute")
-    run = portforge_eval.ReferenceRun(args, sys.modules[__name__], precisions=("fp32", "fp16", "bf16"))
+    run = portforge_eval.ReferenceRun(args, globals(), precisions=("fp32", "fp16", "bf16"))
     torch, device = run.torch()
     dtype = {"fp32": torch.float32, "fp16": torch.float16, "bf16": torch.bfloat16}[run.precision]
     directory = run.checkpoint()
@@ -200,7 +199,7 @@ def forward_case(backend, case, inputs, spec, config):
 
 
 def candidate(args):
-    return portforge_eval.run_candidate(args, sys.modules[__name__])
+    return portforge_eval.run_candidate(args, globals())
 
 
 # Assessment (reference host): portforge_eval.run_assess calls check_case per case, then quality.
@@ -272,8 +271,8 @@ def quality(a):
 
 
 def assess(args):
-    return portforge_eval.run_assess(args, sys.modules[__name__])
+    return portforge_eval.run_assess(args, globals())
 
 
 if __name__ == "__main__":
-    portforge_eval.main(sys.modules[__name__])
+    portforge_eval.main(globals())

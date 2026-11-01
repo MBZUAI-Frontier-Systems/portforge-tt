@@ -113,19 +113,22 @@ def latest(node, stage, precision=None):
 
 
 def frontier(nodes, chosen, stage='perf'):
-    """Rank passing nodes per (model, suite) of one stage; baseline = first passing node."""
+    """Rank passing nodes per (model, suite, precision) of one stage; baseline = first passing node.
+    Precisions never share a group: each is ranked against its own baseline, latest receipt per node."""
     groups = {}
     for node in nodes:
         for row in node['evaluations']:
             if row['stage'] == stage and row['passed'] and row['metrics']:
-                key = (row['model'], row['suite_sha256'], row['cluster_sha256'])
-                groups.setdefault(key, []).append(dict(id=node['code'], job=row['job'],
-                                                       precision=row['precision'], metrics=row['metrics']))
+                key = (row['model'], row['suite_sha256'], row['cluster_sha256'], row['precision'])
+                # A re-measured node keeps its place (the baseline stays first) with its latest receipt.
+                groups.setdefault(key, {})[node['code']] = dict(id=node['code'], job=row['job'],
+                                                                precision=row['precision'], metrics=row['metrics'])
     out = []
-    for (model, suite, cluster), points in groups.items():
+    for (model, suite, cluster, precision), by_code in groups.items():
+        points = list(by_code.values())
         baseline = points[0]['metrics']
         ranked = objective.rank(points, chosen, baseline)
-        out.append(dict(model=model, stage=stage, suite_sha256=suite, cluster_sha256=cluster,
+        out.append(dict(model=model, stage=stage, suite_sha256=suite, cluster_sha256=cluster, precision=precision,
                         baseline=dict(id=points[0]['id'], job=points[0]['job'], metrics=baseline),
                         candidates=len(points), **ranked))
     return out

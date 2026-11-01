@@ -42,6 +42,7 @@ def build(runs, chosen):
                 for node in nodes:
                     for evaluation in node['evaluations']:
                         if (evaluation['stage'] == stage and evaluation['passed']
+                                and evaluation['precision'] == front['precision']
                                 and evaluation['suite_sha256'] == front['suite_sha256']
                                 and evaluation['model'] == front['model']):
                             rows.append(dict(code=node['code'], job=evaluation['job'], precision=evaluation['precision'],
@@ -56,7 +57,8 @@ def build(runs, chosen):
 def markdown(groups):
     lines = []
     for group in groups:
-        lines += ['## %s · %s · %s' % (Path(group['run']).name, group['model'], group['stage']), '',
+        lines += ['## %s · %s · %s · %s' % (Path(group['run']).name, group['model'], group['stage'],
+                                           group['precision']), '',
                   'Mode: %s. Baseline: `%s`. Candidates: %d.' % (group['mode'], group['baseline']['id'][:12],
                                                                   group['candidates']), '',
                   '| source | precision | frontier | ' + ' | '.join(COLUMNS) + ' | transforms |',

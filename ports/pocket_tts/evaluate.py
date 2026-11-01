@@ -37,7 +37,6 @@ import json
 import math
 import os
 import re
-import sys
 import time
 from pathlib import Path
 
@@ -613,7 +612,7 @@ def reference(args):
     go through run.time's exact repeat check and the audio is compared with a tolerance here.
     """
     import numpy as np
-    run = portforge_eval.ReferenceRun(args, sys.modules[__name__])
+    run = portforge_eval.ReferenceRun(args, globals())
     if not run.benchmark and run.precision != "fp32":
         raise ValueError("the immutable correctness oracle is FP32")
     torch, device = run.torch()
@@ -753,7 +752,7 @@ def probe_case(backend, case, inputs, spec, config):
 
 
 def candidate(args):
-    return portforge_eval.run_candidate(args, sys.modules[__name__])
+    return portforge_eval.run_candidate(args, globals())
 
 
 # -------------------------------------------------------------------- assess
@@ -887,8 +886,8 @@ def candidate_keys(case, a):
 
 
 def assess(args):
-    return portforge_eval.run_assess(args, sys.modules[__name__])
+    return portforge_eval.run_assess(args, globals())
 
 
 if __name__ == "__main__":
-    portforge_eval.main(sys.modules[__name__])
+    portforge_eval.main(globals())

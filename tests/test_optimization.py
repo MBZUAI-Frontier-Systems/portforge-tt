@@ -78,11 +78,12 @@ class ObjectiveTests(unittest.TestCase):
 
 
 class SearchTests(unittest.TestCase):
-    def job(self, run, name, code, stage, outcome, transforms=None, at=0):
+    def job(self, run, name, code, stage, outcome, transforms=None, at=0, precision='bf16'):
         folder = Path(run) / 'jobs' / name
         folder.mkdir(parents=True)
         (folder / 'request.json').write_text(json.dumps(dict(kind='evaluate', stage=stage, code_sha256=code,
-                                                             model='parakeet', precision='bf16', cluster_sha256='c')))
+                                                             model='parakeet', precision=precision,
+                                                             cluster_sha256='c')))
         files = {'backend.py': 'x'}
         if transforms is not None:
             files['TRANSFORMS.json'] = json.dumps(transforms)
@@ -123,6 +124,22 @@ class SearchTests(unittest.TestCase):
             self.assertEqual(len((Path(run) / 'search/nodes.jsonl').read_text().splitlines()), 4)
             # Under a different parent the rejected technique is still on the menu.
             self.assertNotIn(('A', 'native-norm-softmax'), search.tried(nodes))
+
+    def test_each_precision_is_ranked_against_its_own_baseline(self):
+        # bfp8_b is faster than bf16 on every source; mixing them made every bf16 receipt infeasible.
+        with tempfile.TemporaryDirectory() as run:
+            self.job(run, 'a8', 'A', 'perf', result(.0022, .0035, 8600.0), dict(parent=None, applied=[]), 1, 'bfp8_b')
+            self.job(run, 'a16', 'A', 'perf', result(.0026, .0038, 8000.0), dict(parent=None, applied=[]), 2)
+            self.job(run, 'b8', 'B', 'perf', result(.0023, .0036, 11800.0), dict(parent='A', applied=[]), 3, 'bfp8_b')
+            self.job(run, 'b16', 'B', 'perf', result(.0026, .0037, 9900.0), dict(parent='A', applied=[]), 4)
+            chosen = objective.spec(primary='throughput', constraints=['p50_latency<=1.1*baseline'])
+            fronts = {f['precision']: f for f in search.frontier(search.build(run), chosen, 'perf')}
+            self.assertEqual(sorted(fronts), ['bf16', 'bfp8_b'])
+            for front in fronts.values():
+                self.assertEqual(front['infeasible'], {})
+                self.assertEqual(front['frontier'], ['B'])
+                self.assertEqual(front['baseline']['id'], 'A')
+            self.assertEqual(fronts['bf16']['ranked'][0]['value'], 9900.0)
 
     def test_masking_always_offers_something_and_is_seeded(self):
         known = search.catalogue()

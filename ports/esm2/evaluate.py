@@ -7,7 +7,6 @@ transformers EsmForMaskedLM in FP32 on the configured reference host (CUDA prefe
 """
 import hashlib
 import json
-import sys
 
 import portforge_eval
 from portforge_eval import (Progress, reference_execution, suite_hash, validate_input_preservation,  # noqa: F401
@@ -100,7 +99,7 @@ def max_row_nrmse(actual, expected):
 def reference(args):
     """Reference host: transformers EsmForMaskedLM logits and last hidden states (FP32 oracle or benchmark)."""
     import numpy as np
-    run = portforge_eval.ReferenceRun(args, sys.modules[__name__])
+    run = portforge_eval.ReferenceRun(args, globals())
     torch, device = run.torch()
     dtype = {"fp32": torch.float32, "bf16": torch.bfloat16}[run.precision]
     directory = run.checkpoint()
@@ -160,7 +159,7 @@ def forward_case(backend, case, inputs, spec, config):
 
 
 def candidate(args):
-    return portforge_eval.run_candidate(args, sys.modules[__name__])
+    return portforge_eval.run_candidate(args, globals())
 
 
 # Assessment (reference host): portforge_eval.run_assess calls check_case per case.
@@ -193,8 +192,8 @@ def check_case(check, case, a):
 
 
 def assess(args):
-    return portforge_eval.run_assess(args, sys.modules[__name__])
+    return portforge_eval.run_assess(args, globals())
 
 
 if __name__ == "__main__":
-    portforge_eval.main(sys.modules[__name__])
+    portforge_eval.main(globals())

@@ -17,7 +17,6 @@ Keep the candidate's view minimal: input/ holds only what the backend needs (nev
 outputs or ground-truth labels). Learned compute must run on TT; the kit rejects CPU
 matmul/attention on model weights while the backend runs.
 """
-import sys
 
 import portforge_eval
 from portforge_eval import check_suite
@@ -84,7 +83,7 @@ def reference(args):
     check, and writes input/ (public) and oracle/ (private). ports/esm2/evaluate.py is the
     shortest complete example.
     """
-    run = portforge_eval.ReferenceRun(args, sys.modules[__name__])
+    run = portforge_eval.ReferenceRun(args, globals())
     torch, device = run.torch()
     directory = run.checkpoint()
     model = None  # TODO: load the official implementation from directory onto device, in FP32
@@ -121,7 +120,7 @@ def forward_case(backend, case, inputs, spec, config):
 
 
 def candidate(args):
-    return portforge_eval.run_candidate(args, sys.modules[__name__])
+    return portforge_eval.run_candidate(args, globals())
 
 
 # Assessment (reference host): portforge_eval.run_assess loads both sides, checks identity and
@@ -144,8 +143,8 @@ def quality(a):
 
 
 def assess(args):
-    return portforge_eval.run_assess(args, sys.modules[__name__])
+    return portforge_eval.run_assess(args, globals())
 
 
 if __name__ == "__main__":
-    portforge_eval.main(sys.modules[__name__])
+    portforge_eval.main(globals())

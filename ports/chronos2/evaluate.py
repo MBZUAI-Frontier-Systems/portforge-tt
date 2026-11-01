@@ -8,7 +8,6 @@ configured reference compute host (CUDA preferred, CPU allowed and recorded).
 import hashlib
 import json
 import math
-import sys
 
 import portforge_eval
 from portforge_eval import (Progress, reference_execution, suite_hash, validate_input_preservation,  # noqa: F401
@@ -182,7 +181,7 @@ def extract_quantiles(predictions, rows, horizon):
 
 def reference(args):
     """Reference host: the chronos-forecasting pipeline's quantile forecasts (FP32 oracle or benchmark)."""
-    run = portforge_eval.ReferenceRun(args, sys.modules[__name__])
+    run = portforge_eval.ReferenceRun(args, globals())
     if not run.benchmark and run.precision != "fp32":
         raise ValueError("the immutable correctness oracle is FP32")
     # A shared GPU can be nearly full of other users' processes; the FP32 oracle then runs on
@@ -235,7 +234,7 @@ def forward_case(backend, case, inputs, spec, config):
 
 
 def candidate(args):
-    return portforge_eval.run_candidate(args, sys.modules[__name__])
+    return portforge_eval.run_candidate(args, globals())
 
 
 # Assessment (reference host): portforge_eval.run_assess calls check_case per case, then quality.
@@ -288,8 +287,8 @@ def quality(a):
 
 
 def assess(args):
-    return portforge_eval.run_assess(args, sys.modules[__name__])
+    return portforge_eval.run_assess(args, globals())
 
 
 if __name__ == "__main__":
-    portforge_eval.main(sys.modules[__name__])
+    portforge_eval.main(globals())

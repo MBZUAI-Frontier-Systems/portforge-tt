@@ -22,8 +22,8 @@ if __package__:
     from .cluster import identity as digest, load as load_cluster
     from .jobs import code_hash, complete_references, snapshot
     from .port import (PACKAGE, PORT, agent_environment, configure, freeze_harness, frozen_environment,
-                       gated_stages, harness_identity, same_evaluator, seed_documents, seed_policy,
-                       trusted_documents)
+                       gated_stages, harness_identity, load_evaluator, same_evaluator, seed_documents,
+                       seed_policy, trusted_documents)
     from ..remote.portforge_eval import check_suite
     from ..remote.portforge_models import model_spec, use_registry
     from ..remote.runner import safe_file, write_json
@@ -33,8 +33,8 @@ else:  # flat: the frozen run harness
     from cluster import identity as digest, load as load_cluster
     from jobs import code_hash, complete_references, snapshot
     from port import (PACKAGE, PORT, agent_environment, configure, freeze_harness, frozen_environment,
-                      gated_stages, harness_identity, same_evaluator, seed_documents, seed_policy,
-                      trusted_documents)
+                      gated_stages, harness_identity, load_evaluator, same_evaluator, seed_documents,
+                      seed_policy, trusted_documents)
     from portforge_eval import check_suite
     from portforge_models import model_spec, use_registry
     from runner import safe_file, write_json
@@ -44,10 +44,7 @@ def check_suites(corpus, model):
     """Build every stage with the pack's evaluator and reject impossible gates before a run starts."""
     # Load this pack's evaluator strictly by path so no other "evaluate" module
     # can shadow it at launch time.
-    import importlib.util
-    spec = importlib.util.spec_from_file_location('portforge_pack_evaluate_launch', PORT['dir'] / 'evaluate.py')
-    evaluator = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(evaluator)
+    evaluator = load_evaluator('portforge_pack_evaluate_launch')
     for stage in gated_stages() + ['full']:
         suite = check_suite(evaluator.make_suite(corpus, stage, model)[0])
         if suite.get('mesh_cards') != (PORT['mesh_cards'] if stage == 'mesh' else None):

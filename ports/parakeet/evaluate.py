@@ -12,7 +12,6 @@ import hashlib
 import io
 import json
 import math
-import sys
 
 import portforge_eval
 from portforge_eval import (Progress, reference_execution, suite_hash, validate_input_preservation,  # noqa: F401
@@ -170,7 +169,7 @@ def encode_reference(model, mel, frame_mask, device):
 def reference(args):
     """Reference host: transformers ParakeetForTDT encoder states and greedy tokens (FP32 oracle or benchmark)."""
     import numpy as np
-    run = portforge_eval.ReferenceRun(args, sys.modules[__name__])
+    run = portforge_eval.ReferenceRun(args, globals())
     torch, device = run.torch()
     dtype = {"fp32": torch.float32, "bf16": torch.bfloat16}[run.precision]
     directory = run.checkpoint()
@@ -255,7 +254,7 @@ def forward_case(backend, case, inputs, spec, config):
 
 
 def candidate(args):
-    return portforge_eval.run_candidate(args, sys.modules[__name__])
+    return portforge_eval.run_candidate(args, globals())
 
 
 # Assessment (reference host): portforge_eval.run_assess calls check_case per case, then quality.
@@ -330,8 +329,8 @@ def quality(a):
 
 
 def assess(args):
-    return portforge_eval.run_assess(args, sys.modules[__name__])
+    return portforge_eval.run_assess(args, globals())
 
 
 if __name__ == "__main__":
-    portforge_eval.main(sys.modules[__name__])
+    portforge_eval.main(globals())

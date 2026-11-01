@@ -42,8 +42,11 @@ PRECISIONS = portforge_eval.TT_PRECISIONS
 # Profile jobs: smoke/bringup inputs, or one perf case (PORTFORGE_PROFILE_CASE) with a few repeats.
 PROFILE_STAGES = ('smoke', 'bringup', 'perf')
 PROFILE_CASE = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,63}')
+# Programs the device profiler holds between drains: TT-Metal's default drops ops of one
+# large-batch perf case's timed window.
+PROFILE_PROGRAMS = 20000
 PROFILE_ENV = {'TT_METAL_DEVICE_PROFILER': '1', 'TT_METAL_PROFILER_DIR': '/output/profiler',
-               'PORTFORGE_PROFILE': '1'}
+               'TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT': str(PROFILE_PROGRAMS), 'PORTFORGE_PROFILE': '1'}
 FORWARDED_MEASUREMENTS = ('load_seconds', 'resident_dram_bytes', 'trace_reserved_bytes', 'host_peak_rss_bytes',
                           'observed_tt_calls', 'memory_scope', 'device_options', 'peak_dram_bytes', 'peak_l1_bytes')
 

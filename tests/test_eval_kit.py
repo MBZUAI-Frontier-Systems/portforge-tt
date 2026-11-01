@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import types
@@ -217,3 +218,23 @@ class ProfileCaseTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProfilerEntryTests(unittest.TestCase):
+    def test_every_pack_command_line_runs_inside_another_main_module(self):
+        # port_profile runs `python -m tracy /evaluate.py ...`: tracy execs the script with
+        # __name__ == "__main__" while sys.modules["__main__"] is tracy itself.
+        repo = Path(__file__).resolve().parents[1]
+        script = ('import sys, types\n'
+                  'import portforge_models; portforge_models.use_registry(sys.argv[2])\n'
+                  'sys.modules["__main__"] = types.ModuleType("tracy_main")\n'
+                  'sys.argv = [sys.argv[1], "--help"]\n'
+                  'exec(compile(open(sys.argv[0]).read(), sys.argv[0], "exec"),'
+                  ' {"__name__": "__main__", "__file__": sys.argv[0]})\n')
+        for pack in sorted((repo / "ports").glob("*/evaluate.py")):
+            with self.subTest(pack=pack.parent.name):
+                done = subprocess.run([sys.executable, "-c", script, str(pack), str(pack.with_name("models.json"))],
+                                      capture_output=True, text=True,
+                                      env={**os.environ, "PYTHONPATH": str(repo / "portforge_tt" / "remote")})
+                self.assertEqual(done.returncode, 0, done.stderr[-1500:])
+                self.assertIn("candidate", done.stdout)

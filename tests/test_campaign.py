@@ -4,6 +4,8 @@ import io
 import tarfile
 import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -236,3 +238,21 @@ class CampaignTests(RunFixture):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PackageModeTests(unittest.TestCase):
+    def test_launcher_checks_every_pack_suite_in_package_mode(self):
+        # The launcher runs as portforge_tt.control.*, with neither remote/ nor the pack on sys.path.
+        repo = Path(__file__).resolve().parents[1]
+        script = ('import json, sys; from pathlib import Path\n'
+                  'from portforge_tt.control import campaign, port\n'
+                  'from portforge_tt.remote.portforge_models import use_registry\n'
+                  'for pack in sys.argv[1:]:\n'
+                  '    sys.modules.pop("evaluate", None); port.configure(Path(pack))\n'
+                  '    use_registry(Path(pack) / "models.json")\n'
+                  '    corpus = json.loads((Path(pack) / "corpus.json").read_text())\n'
+                  '    campaign.check_suites(corpus, port.PORT["key"])\n')
+        packs = [str(p) for p in sorted((repo / 'ports').iterdir()) if (p / 'corpus.json').is_file()]
+        done = subprocess.run([sys.executable, '-c', script, *packs], cwd=str(repo), capture_output=True, text=True,
+                              env={**os.environ, 'PYTHONPATH': str(repo)})
+        self.assertEqual(done.returncode, 0, done.stderr[-2000:])

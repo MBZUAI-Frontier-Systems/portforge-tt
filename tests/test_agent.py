@@ -55,6 +55,11 @@ class AgentTests(unittest.TestCase):
                 agent.parse_decision(json.dumps(value))
         with self.assertRaises(ValueError):
             agent.parse_decision('{"action":"continue","action":"pause","instruction":"x"}')
+        # Models sometimes wrap the reply in one markdown fence; anything else around it is still rejected.
+        self.assertEqual(agent.parse_decision('```json\n%s\n```' % json.dumps(valid)), valid)
+        self.assertEqual(agent.parse_decision('```\n%s\n```\n' % json.dumps(valid)), valid)
+        with self.assertRaises(ValueError):
+            agent.parse_decision('Here it is:\n```json\n%s\n```' % json.dumps(valid))
 
     def test_isolation_config_denies_host_writes_exec_and_secrets(self):
         tool = SimpleNamespace(name='parakeet_tools', hostname='127.0.0.1', port=8000)
