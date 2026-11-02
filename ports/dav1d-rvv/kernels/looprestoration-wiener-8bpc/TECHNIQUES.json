@@ -1,0 +1,198 @@
+{
+ "family": "looprestoration-wiener-8bpc",
+ "spec": {
+  "functions": "dav1d_wiener_filter7_8bpc_rvv (c->wiener[0], 7-tap) and dav1d_wiener_filter5_8bpc_rvv (c->wiener[1], 5-tap: filter[k][0] = filter[k][6] = 0), both with the signature of decl_lr_filter_fn at BITDEPTH 8: (pixel *dst, ptrdiff_t stride, const pixel (*left)[4], const pixel *lpf, int w, int h, const LooprestorationParams *params, enum LrEdgeFlags edges)",
+  "formula": "wiener_c in context/reference_looprestoration_tmpl.c at 8bpc. Horizontal pass per row (wiener_filter_h): sum = (1 << 14) + 128*src[x] + sum_i fh[i]*t(x+i-3), out = iclip((sum + 4) >> 3, 0, 8191) (u16 intermediate); edge pixels t(j) come from left[][], src[-3..-1] or src[0] (LR_HAVE_LEFT) and src[w..w+2] or src[w-1] (LR_HAVE_RIGHT). Vertical pass (wiener_filter_v/hv): sum = -(1 << 18) + sum_k fv[k]*row_k[x], out = iclip_pixel((sum + 1024) >> 11). Rows above/below come from lpf (2 rows at lpf, 2 rows at lpf + 6*stride) when LR_HAVE_TOP/BOTTOM, else the edge row is repeated",
+  "domain": "1 <= w <= 384 (w == 256 when LR_HAVE_RIGHT), 1 <= h <= 64; taps symmetric (filter[k][i] == filter[k][6-i], as the decoder and checkasm build them); f0 in [-5,10], f1 in [-23,8], f2 in [-17,46], filter[0][3] = -2*(f0+f1+f2), filter[1][3] = 128 - 2*(f0+f1+f2); pixels 0..255",
+  "width_bounds": [
+   "horizontal intermediate: 128*255 + taps*255 + 2^14 fits in 17 bits signed before the shift; after >> 3 and the clip it is 13 bits (0..8191)",
+   "vertical: sum of 7 products of 13-bit values and 8-bit taps needs 32 bits before >> 11",
+   "writes past w in a dst row are allowed up to w rounded up to 64 pixels (checkasm_check_pixel_padded_align(..., 64, 1)); nothing else outside the w x h block may change",
+   "every VLEN from 128 to 1024; plain RVV 1.0 plus Zba/Zbb (the X280 has no Zbs, no Zvbb)"
+  ],
+  "regimes": {
+   "bench": "checkasm --bench: w=256, h=64, all four edges (LR_HAVE_LEFT|RIGHT|TOP|BOTTOM), one cell per function: wiener_7tap_8bpc and wiener_5tap_8bpc",
+   "check": "checkasm: random w in 1..384, h in 1..64, every one of the 16 edge combinations, random taps in the domain, and the padded-align output check"
+  }
+ },
+ "candidates": [
+  {
+   "id": "vla-stripmine",
+   "application": "one vsetvl-driven loop over the row width per pass; the tail is a smaller vl, no scalar epilogue",
+   "expected_gain": "removes scalar tail code; the baseline structure of any RVV port",
+   "preconditions": [
+    "the padded-align rule allows writing up to align(w, 64)"
+   ],
+   "sources": [
+    "catalogue"
+   ]
+  },
+  {
+   "id": "k:symmetric-tap-preadd",
+   "title": "Add mirrored pixel pairs before multiplying (symmetric taps)",
+   "application": "filter[i] == filter[6-i]: add t(x-3)+t(x+3), t(x-2)+t(x+2), t(x-1)+t(x+1) first, then 3 multiplies plus the centre instead of 7 (4-tap form for the 5-tap filter); the vertical pass pairs rows the same way",
+   "expected_gain": "about 40% fewer multiplies in both passes",
+   "preconditions": [
+    "symmetric taps are part of the domain (decoder and checkasm)",
+    "pair sums of u8 fit in 9 bits, of 13-bit intermediates in 14 bits"
+   ],
+   "sources": [
+    "arm64_looprestoration.S wiener_filter7_h (ext + add pairs, mul/mla)",
+    "x86 looprestoration_avx2.asm"
+   ]
+  },
+  {
+   "id": "narrow-sew-chain",
+   "application": "do the horizontal pass in 16-bit lanes: |sum| stays below 2^15 for the domain's taps once the 2^14 offset is folded in (arm64 computes it in int16 with a saturating add and stores the result biased by -2048, compensated in the vertical pass)",
+   "expected_gain": "twice the lanes per register for the horizontal pass",
+   "preconditions": [
+    "prove the int16 range per tap envelope or use a saturating add whose clamp matches iclip"
+   ],
+   "sources": [
+    "arm64_looprestoration.S header comment and wiener_filter7_h"
+   ]
+  },
+  {
+   "id": "widen-fused",
+   "application": "vwmulu/vwmaccsu/vwmacc from u8 pixels and s16 taps (horizontal) or u16 rows and taps (vertical) instead of extend then multiply",
+   "expected_gain": "removes the separate vzext steps",
+   "preconditions": [
+    "signedness of each operand matches the instruction (vwmaccsu: signed scalar, unsigned vector)"
+   ],
+   "sources": [
+    "catalogue"
+   ]
+  },
+  {
+   "id": "fused-macc",
+   "application": "vmacc/vwmacc chains for the tap sums",
+   "expected_gain": "one op per tap",
+   "preconditions": [],
+   "sources": [
+    "catalogue"
+   ]
+  },
+  {
+   "id": "vx-scalar-operands",
+   "application": "taps as scalar operands (.vx) loaded once per call",
+   "expected_gain": "no broadcast registers",
+   "preconditions": [],
+   "sources": [
+    "catalogue"
+   ]
+  },
+  {
+   "id": "k:fused-hv-ring",
+   "title": "One pass per output row over a ring of filtered rows",
+   "application": "keep the last 6 horizontally filtered rows in a stack ring buffer (384 u16 each) and, per new row, run the horizontal pass and immediately the vertical pass for one output row (arm64 wiener_filter7_hv); rotate pointers, never copy rows",
+   "expected_gain": "each source row is filtered horizontally once and the vertical pass reads rows still in L1",
+   "preconditions": [
+    "stack frame within the psABI (16-byte aligned, restored)",
+    "top/bottom edge handling with lpf rows as in wiener_c"
+   ],
+   "sources": [
+    "arm64_looprestoration.S wiener_filter7_8bpc / _hv",
+    "x86 avx2 wiener_filter7_8bpc"
+   ]
+  },
+  {
+   "id": "k:slide-taps",
+   "title": "Build the shifted pixel vectors with slides from one load",
+   "application": "load vl+6 pixels once and derive the 7 tap vectors with vslidedown (or keep overlapping unit-stride vle8 loads at offsets 0..6: unaligned byte loads are cheap); measure both on the X280",
+   "expected_gain": "fewer loads per output, or fewer permutes: depends on the X280's load vs slide cost",
+   "preconditions": [
+    "slides read past vl only inside the loaded group"
+   ],
+   "sources": [
+    "arm64 ext",
+    "catalogue avoid-gather"
+   ]
+  },
+  {
+   "id": "k:edge-prepass",
+   "title": "Handle the left/right padding outside the main loop",
+   "application": "materialize the padded row (3 pixels each side from left[], src[-3..], or replicated edge pixels) only for the first and last vector, or into a small stack row, so the main loop has no edge logic",
+   "expected_gain": "a branch-free main loop",
+   "preconditions": [
+    "exactly the C's padding cases for every edge flag"
+   ],
+   "sources": [
+    "arm64 wiener_filter7_h (right_ext_mask)"
+   ]
+  },
+  {
+   "id": "max-lmul",
+   "application": "LMUL 4-8 for the 16-bit horizontal pass and LMUL 2-4 for 32-bit vertical sums, as far as registers allow",
+   "expected_gain": "fewer loop iterations and vsetvl; at VLEN 512, e16 m8 covers a 256-pixel row in one strip",
+   "preconditions": [
+    "register pressure: 7 taps of inputs plus accumulators"
+   ],
+   "sources": [
+    "catalogue"
+   ]
+  },
+  {
+   "id": "k:specialize-5tap",
+   "title": "A separate 5-tap path",
+   "application": "wiener_filter5 skips the outer tap pair and needs a 5-row ring (arm64 has separate filter5 functions)",
+   "expected_gain": "about 2/7 less work for the 5-tap cell",
+   "preconditions": [],
+   "sources": [
+    "arm64 wiener_filter5_8bpc_neon"
+   ]
+  },
+  {
+   "id": "vsetvl-hoist",
+   "application": "set vtype once per pass; group same-width ops",
+   "expected_gain": "fewer vsetvli in the hot loop",
+   "preconditions": [],
+   "sources": [
+    "catalogue"
+   ]
+  },
+  {
+   "id": "multi-accumulator-unroll",
+   "application": "two independent output vectors per iteration to hide multiply latency on the in-order X280",
+   "expected_gain": "better pipelining",
+   "preconditions": [
+    "register pressure"
+   ],
+   "sources": [
+    "catalogue",
+    "arm64 processes 16 pixels as two 8-lane halves"
+   ]
+  },
+  {
+   "id": "load-ahead",
+   "application": "issue the next strip's loads before the current strip's multiply chain",
+   "expected_gain": "hides load latency",
+   "preconditions": [],
+   "sources": [
+    "catalogue"
+   ]
+  },
+  {
+   "id": "hoist-invariants",
+   "application": "taps, rounding constants and edge masks loaded once per call",
+   "expected_gain": "less per-row setup",
+   "preconditions": [],
+   "sources": [
+    "catalogue"
+   ]
+  },
+  {
+   "id": "tail-agnostic",
+   "application": "ta,ma everywhere results past vl are dead",
+   "expected_gain": "lets the hardware skip tail work",
+   "preconditions": [],
+   "sources": [
+    "catalogue"
+   ]
+  }
+ ],
+ "mined_from": [
+  "dav1d d7a83f6e: src/looprestoration_tmpl.c (C reference), src/arm/64/looprestoration.S (wiener_filter7/5 + _h/_v/_hv), src/x86/looprestoration_avx2.asm (wiener_filter7/5_8bpc), tests/checkasm/looprestoration.c",
+  "the RVV catalogue (portforge_tt/guides/rvv_techniques.json)",
+  "X280 facts: VLEN 512, Zba/Zbb, no Zbs"
+ ]
+}

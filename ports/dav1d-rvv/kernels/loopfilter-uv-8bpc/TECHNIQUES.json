@@ -1,0 +1,127 @@
+{
+ "family": "loopfilter-uv-8bpc",
+ "spec": {
+  "functions": "dav1d_lpf_h_sb_uv_8bpc_rvv (c->loop_filter_sb[1][0], column edges) and dav1d_lpf_v_sb_uv_8bpc_rvv (c->loop_filter_sb[1][1], row edges), signature decl_loopfilter_sb_fn at BITDEPTH 8: (pixel *dst, ptrdiff_t stride, const uint32_t *mask, const uint8_t (*lvl)[4], ptrdiff_t lvl_stride, const Av1FilterLUT *lut, int w)",
+  "formula": "loop_filter_h_sb128uv_c / loop_filter_v_sb128uv_c and loop_filter() in context/reference_loopfilter_tmpl.c: for each 4-pixel block j < w whose bit is set in mask[0] (wd 4) or mask[1] (wd 6), with level L from lvl (0 = skip), E = lut->e[L], I = lut->i[L], H = L >> 4, compute fm (filter mask from |p1-p0|, |q1-q0|, |p0-q0|*2+|p1-q1|/2 against I and E), flat (wd 6) and hev, then the narrow (4-tap) or 6-tap filter exactly as the C, per pixel line",
+  "domain": "w <= 32 blocks of 4 pixels (n_blks in checkasm: 16 for chroma); lvl values 0..63; lut from dav1d_calc_eih (any sharpness 0..7); pixels 0..255",
+  "width_bounds": [
+   "decisions are data dependent per pixel line: build them as vector masks and select, no per-pixel branches",
+   "the h variant filters across a vertical edge: pixels of one line are contiguous in memory (transpose 4/6 columns, e.g. strided segment loads/stores); the v variant reads rows at stride",
+   "only the pixels the C writes may change (checkasm compares the whole block)",
+   "every VLEN 128..1024; RVV 1.0 + Zba/Zbb; strided offsets must be multiples of the element width (implementation-defined otherwise, and wrong on the X280)"
+  ],
+  "regimes": {
+   "bench": "checkasm --bench: one cell per variant and width: lpf_h_sb_uv_w4, lpf_h_sb_uv_w6, lpf_v_sb_uv_w4, lpf_v_sb_uv_w6 (8bpc)",
+   "check": "checkasm: random masks, levels, sharpness and edge pixels set to trigger every filter decision"
+  }
+ },
+ "candidates": [
+  {
+   "id": "k:mask-select",
+   "title": "Filter decisions as vector masks",
+   "application": "compute fm, flat and hev with vector compares into mask registers and apply the 4- and 6-tap results with vmerge (or masked stores), as arm64 does with bit-selects",
+   "expected_gain": "branch-free per-line decisions",
+   "preconditions": [],
+   "sources": [
+    "arm64 lpf_16_wd*",
+    "x86 FILTER macro"
+   ]
+  },
+  {
+   "id": "k:segment-transpose",
+   "title": "Transpose columns with segment loads/stores (h variant)",
+   "application": "vlsseg4e8/vlsseg6e8 at the row stride gather p1..q1 (or p2..q2) of many lines at once, filter, then vssseg back",
+   "expected_gain": "one instruction per gathered field instead of scalar transposes",
+   "preconditions": [
+    "only the columns the C writes are stored back"
+   ],
+   "sources": [
+    "catalogue segment-loads",
+    "x280 calibration: vlsseg cost"
+   ]
+  },
+  {
+   "id": "k:many-blocks-per-vector",
+   "title": "Process several 4-pixel blocks per vector",
+   "application": "lay lines of consecutive blocks side by side so one vector covers 16+ lines (VLEN 512 e8: 64 lanes), with per-lane E/I/H thresholds expanded from lvl",
+   "expected_gain": "amortizes the per-block setup",
+   "preconditions": [
+    "per-block mask bits and levels expand to per-lane values"
+   ],
+   "sources": [
+    "arm64 lpf_*_16_neon (16 lines at a time)"
+   ]
+  },
+  {
+   "id": "narrow-sew-chain",
+   "application": "the 4- and 6-tap filters fit in 16-bit lanes (sums of a few 8-bit pixels with small weights)",
+   "expected_gain": "16-bit lanes instead of 32",
+   "preconditions": [],
+   "sources": [
+    "catalogue"
+   ]
+  },
+  {
+   "id": "widen-fused",
+   "application": "vwaddu/vwsubu for the pixel differences and sums",
+   "expected_gain": "fewer extends",
+   "preconditions": [],
+   "sources": [
+    "catalogue"
+   ]
+  },
+  {
+   "id": "vnclip-requant",
+   "application": "vnclip/vnclipu for the rounding shift plus clamp back to pixels",
+   "expected_gain": "one op per narrow step",
+   "preconditions": [],
+   "sources": [
+    "catalogue"
+   ]
+  },
+  {
+   "id": "branchless-merge",
+   "application": "vmerge for the wd4/wd6 and fm/hev selections",
+   "expected_gain": "no data branches",
+   "preconditions": [],
+   "sources": [
+    "catalogue"
+   ]
+  },
+  {
+   "id": "k:skip-empty",
+   "title": "Skip blocks with no edges cheaply",
+   "application": "test mask words before loading pixels; skip whole groups of blocks with no bits set (the C loops over set bits)",
+   "expected_gain": "less work on sparse masks",
+   "preconditions": [
+    "never skip a block whose bit is set"
+   ],
+   "sources": [
+    "arm64 sb loop"
+   ]
+  },
+  {
+   "id": "vsetvl-hoist",
+   "application": "group same-width ops between vsetvli",
+   "expected_gain": "fewer vtype switches",
+   "preconditions": [],
+   "sources": [
+    "catalogue"
+   ]
+  },
+  {
+   "id": "tail-agnostic",
+   "application": "ta,ma wherever tails are dead",
+   "expected_gain": "",
+   "preconditions": [],
+   "sources": [
+    "catalogue"
+   ]
+  }
+ ],
+ "mined_from": [
+  "dav1d d7a83f6e: src/loopfilter_tmpl.c, src/lf_mask.h, src/arm/64/loopfilter.S, src/x86/loopfilter_avx2.asm, tests/checkasm/loopfilter.c",
+  "RVV catalogue",
+  "X280 facts"
+ ]
+}

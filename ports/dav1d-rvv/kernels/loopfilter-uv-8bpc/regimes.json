@@ -1,0 +1,13 @@
+{
+ "noise_floor": 0.01,
+ "noise_floor_basis": "A/A of one checkasm binary twice in a session (splat_mv, 2026-10-29): within 0.64%",
+ "reference_cell": "lpf_v_sb_uv_w6_8bpc",
+ "cells": [
+  "lpf_h_sb_uv_w4_8bpc",
+  "lpf_h_sb_uv_w6_8bpc",
+  "lpf_v_sb_uv_w4_8bpc",
+  "lpf_v_sb_uv_w6_8bpc"
+ ],
+ "baseline": "C reference, timed in the same checkasm process (paired per round)",
+ "check": "checkasm at VLEN 128/256/512/1024 (G1), 8 more seeds at 128/1024 (G2), the X280 before timing; held-out seeds at certification (no formal harness for this family)"
+}

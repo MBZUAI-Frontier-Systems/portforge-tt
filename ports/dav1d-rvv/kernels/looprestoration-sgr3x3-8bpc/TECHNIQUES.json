@@ -1,0 +1,137 @@
+{
+ "family": "looprestoration-sgr3x3-8bpc",
+ "spec": {
+  "functions": "dav1d_sgr_filter_3x3_8bpc_rvv (c->sgr[1]) with the signature of decl_lr_filter_fn at BITDEPTH 8: (pixel *dst, ptrdiff_t stride, const pixel (*left)[4], const pixel *lpf, int w, int h, const LooprestorationParams *params, enum LrEdgeFlags edges)",
+  "formula": "sgr_3x3_c in context/reference_sgr.c at 8bpc: per row, 3x3 box sums of pixels and of squared pixels (edge pixels from left[], lpf rows, replication as in the C), then per pixel a = sumsq*9 - sum*sum, p = max(a, 0), z = (p * s + (1 << 19)) >> 20 clamped to 255, x = dav1d_sgr_x_by_x[z], A = (x * sum * 455 + (1 << 11)) >> 12 and B = 256 - x; then the 3x3 weighted (3/4) neighbourhood of A and B, the filtered value and the blend with weight w1, exactly as the C",
+  "domain": "1 <= w <= 384 (w == 256 when LR_HAVE_RIGHT), 1 <= h <= 64; params->sgr.s1 from dav1d_sgr_params (checkasm uses index 10), w1 = 160 - (rnd & 127) - w0 with w0 = 0 for 3x3; pixels 0..255",
+  "width_bounds": [
+   "box sums of 9 pixels need 12 bits; sums of 9 squares need 20 bits",
+   "a = 9*sumsq - sum^2 needs 32-bit signed arithmetic; z*s products need 32 bits before >> 20",
+   "writes past w in a dst row are allowed up to w rounded up to 64 pixels (checkasm padded-align); nothing else may change",
+   "the only symbol outside your file you may use is the table dav1d_sgr_x_by_x (256 bytes, read-only); every VLEN 128..1024; RVV 1.0 + Zba/Zbb"
+  ],
+  "regimes": {
+   "bench": "checkasm --bench: w=256, h=64, all edges, one cell: sgr_3x3_8bpc",
+   "check": "checkasm: random w, h, all 16 edge combinations, random w1"
+  }
+ },
+ "candidates": [
+  {
+   "id": "vla-stripmine",
+   "application": "one vsetvl-driven strip loop per row pass; the tail is a smaller vl",
+   "expected_gain": "no scalar epilogue",
+   "preconditions": [],
+   "sources": [
+    "catalogue"
+   ]
+  },
+  {
+   "id": "k:box-sliding",
+   "title": "Box sums by sliding adds",
+   "application": "horizontal 3-sums of pixels and squares from shifted loads (or slides), vertical sums from three row buffers kept in a ring; never recompute 9 products per pixel",
+   "expected_gain": "each box sum is 2 adds per direction",
+   "preconditions": [],
+   "sources": [
+    "arm64 sgr_box3_row_h / sgr_box3_vert",
+    "x86 sgr_filter_3x3"
+   ]
+  },
+  {
+   "id": "k:table-gather",
+   "title": "x_by_x lookup by an indexed load or an in-register gather",
+   "application": "z is at most 255: vluxei8 from dav1d_sgr_x_by_x, or keep the 256-byte table in an LMUL-4 register group at VLEN 512 and use vrgather.vv with the 8-bit z as index",
+   "expected_gain": "replaces scalar table loads; in-register gather avoids memory latency",
+   "preconditions": [
+    "indices clamped to 0..255 before the lookup"
+   ],
+   "sources": [
+    "arm64 tbl on the table",
+    "x86 vpgatherdd"
+   ]
+  },
+  {
+   "id": "k:fused-row-pipeline",
+   "title": "One pass per output row over ring buffers",
+   "application": "keep sum/sumsq rows and A/B rows in stack rings; per new source row compute box sums, A/B, and finish one output row, rotating pointers (the arm64 C driver structure, all in asm)",
+   "expected_gain": "rows stay in L1; no full-plane intermediates",
+   "preconditions": [
+    "psABI stack frame, restored registers"
+   ],
+   "sources": [
+    "arm64 looprestoration.h sgr_filter_3x3_neon"
+   ]
+  },
+  {
+   "id": "widen-fused",
+   "application": "vwmulu/vwmaccu for squares and the 455 * x * sum product chain",
+   "expected_gain": "fewer extend steps",
+   "preconditions": [],
+   "sources": [
+    "catalogue"
+   ]
+  },
+  {
+   "id": "narrow-sew-chain",
+   "application": "keep box sums of pixels in 16-bit lanes and squares in 32-bit; finish filter in 16/32 bits as the bounds allow",
+   "expected_gain": "more lanes per register",
+   "preconditions": [
+    "prove each width from the bounds above"
+   ],
+   "sources": [
+    "catalogue"
+   ]
+  },
+  {
+   "id": "max-lmul",
+   "application": "LMUL 2-4 for 32-bit stages within register pressure",
+   "expected_gain": "fewer iterations",
+   "preconditions": [],
+   "sources": [
+    "catalogue"
+   ]
+  },
+  {
+   "id": "vsetvl-hoist",
+   "application": "group same-width ops between vsetvli",
+   "expected_gain": "fewer vtype switches",
+   "preconditions": [],
+   "sources": [
+    "catalogue"
+   ]
+  },
+  {
+   "id": "hoist-invariants",
+   "application": "s, w1, rounding constants and the table base loaded once per call",
+   "expected_gain": "less per-row setup",
+   "preconditions": [],
+   "sources": [
+    "catalogue"
+   ]
+  },
+  {
+   "id": "multi-accumulator-unroll",
+   "application": "two strips per iteration to hide latency on the in-order X280",
+   "expected_gain": "better pipelining",
+   "preconditions": [
+    "register pressure"
+   ],
+   "sources": [
+    "catalogue"
+   ]
+  },
+  {
+   "id": "tail-agnostic",
+   "application": "ta,ma wherever tails are dead",
+   "expected_gain": "",
+   "preconditions": [],
+   "sources": [
+    "catalogue"
+   ]
+  }
+ ],
+ "mined_from": [
+  "dav1d d7a83f6e: src/looprestoration_tmpl.c sgr_3x3_c and helpers, src/tables.c dav1d_sgr_x_by_x, src/arm/looprestoration.h + src/arm/64/looprestoration*.S (sgr), src/x86/looprestoration_avx2.asm sgr_filter_3x3_8bpc, tests/checkasm/looprestoration.c",
+  "RVV catalogue",
+  "X280: VLEN 512, Zba/Zbb"
+ ]
+}

@@ -2,7 +2,7 @@
 
 runs/<id>/events.jsonl holds trusted events written by the orchestrator only:
 
-  {"type": "node", "id": sha, "parents": [...], "operator": "seed|import|mutate|combine|dispatch|knob|debug|novel",
+  {"type": "node", "id": sha, "parents": [...], "operator": "seed|import|placeholder|port|mutate|combine|dispatch|knob|debug|novel",
    "declared": {"applied": [...], "knobs": {...}, "novel": "...", "note": "..."}, "source": "nodes/<sha>/kernel.c"}
   {"type": "gate", "id": sha, "gate": "G0|G1|G2|G2f|G3|G4|G5", "passed": bool, "detail": {...}}
   {"type": "profile", "id": sha, "profile": {...}}          # static profile + detect hits
@@ -23,7 +23,7 @@ from pathlib import Path
 
 from . import objective
 
-OPERATORS = ("seed", "import", "mutate", "combine", "dispatch", "knob", "debug", "novel")
+OPERATORS = ("seed", "import", "placeholder", "port", "mutate", "combine", "dispatch", "knob", "debug", "novel")
 OUTCOMES = ("impl_fail", "wrong", "regress", "neutral", "mixed", "improve")
 CORRECTNESS_GATES = ("G1", "G2", "G2f")
 

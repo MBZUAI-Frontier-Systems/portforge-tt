@@ -374,7 +374,8 @@ class Campaign:
             + "".join(f"- context/{p.name} ({len(p.read_text().splitlines())} lines)\n" for p in sources))
         (ws / "PROFILE.md").write_text(_profile_summary(parent.get("profile"), full=True))
         cells = self.tree.cell_speedups(plan["parent"])
-        (ws / "CELLS.md").write_text("# Parent speedup per cell (vs fastest correct upstream RVV)\n\n"
+        baseline = self.entry.get("baseline", "the fastest correct upstream RVV kernel per cell")
+        (ws / "CELLS.md").write_text(f"# Parent speedup per cell (vs {baseline})\n\n"
                                      + "\n".join(f"- {k}: {v:.3f}x" for k, v in sorted(cells.items())))
         (ws / "HISTORY.md").write_text(self.tree.history(plan["parent"]))
         if failure:
@@ -387,7 +388,8 @@ class Campaign:
         tools = KernelTools(f"kernel_w{slot}", ws, self.gates, self.pack, self.family, f"r{rnd}w{slot}", self.src,
                             base_port=8600)
         try:
-            text = prompt("implementer", family=self.family, signature=self.entry.get("signature"),
+            text = prompt("porter" if plan.get("operator") == "port" else "implementer", family=self.family,
+                          signature=self.entry.get("signature"),
                           contract=CONTRACTS.get(self.entry.get("signature"), CONTRACTS[None]),
                           parent=plan["parent"], minutes=self.implementer_minutes, source=self.src,
                           language=LANGUAGES.get(self.src, LANGUAGES["kernel.c"]))
@@ -424,7 +426,7 @@ class Campaign:
 
     # ------------------------------------------------------------------ rounds
 
-    def round(self):
+    def round(self, plans=None):
         rnd = self.manifest["rounds"] + 1
         lost = [n for n, node in self.tree.nodes.items() if node["status"] == "infra-error"]
         if lost:  # a gate call died (host/network); the sources are stored, so evaluate again
@@ -433,9 +435,10 @@ class Campaign:
                 self.tree.append({"type": "status", "id": n, "status": "pending", "note": "retry after infra error"})
             self.evaluate(lost)
         rng = policy.rng_for(self.manifest["seed"], rnd)
-        menus, dispatch = self.menus(rng)
-        plans = (self.plan_llm(menus, dispatch, rnd) if self.planner == "llm"
-                 else self.plan_thompson(menus, dispatch, rng))
+        menus, dispatch = ([], []) if plans is not None else self.menus(rng)
+        if plans is None:
+            plans = (self.plan_llm(menus, dispatch, rnd) if self.planner == "llm"
+                     else self.plan_thompson(menus, dispatch, rng))
         (self.run_dir / "plans").mkdir(exist_ok=True)
         (self.run_dir / "plans" / f"round-{rnd:03d}.json").write_text(
             json.dumps({"menus": menus, "dispatch": dispatch, "plans": plans}, indent=1, default=str) + "\n")
@@ -492,6 +495,38 @@ class Campaign:
             if passed:
                 self.tree.append({"type": "status", "id": n, "status": "certified"})
         return self.status("certified" if targets else "nothing to certify")
+
+    PORT_APPROACHES = [
+        "follow the structure of the arm64 implementation in context/ (its decomposition into "
+        "passes and helper functions), translated to length-agnostic RVV",
+        "follow the structure of the x86 implementation in context/, translated to length-agnostic RVV",
+        "design directly from the C reference for RVV: strip-mine each row with vsetvli, no other "
+        "ISA's structure",
+        "lowest risk first: the simplest correct vector structure (wide lanes, no tricks), then "
+        "measure-driven tuning once kernel_check is green",
+    ]
+
+    def correct_nodes(self):
+        return [n for n, node in self.tree.nodes.items() if node["operator"] != "placeholder"
+                and all(node["gates"].get(g, {}).get("passed") for g in ("G0", "G1", "G2"))]
+
+    def port(self, ports=4, max_rounds=2):
+        """Porting stage for families with no RVV yet: independent ports of the
+        placeholder, each told a different approach, until one passes G0-G2. The
+        ports become the roots the search optimizes from."""
+        placeholder = [n for n, node in self.tree.nodes.items() if node["operator"] == "placeholder"]
+        if not placeholder:
+            return None
+        for _ in range(max_rounds):
+            if self.correct_nodes() or time.time() >= self.deadline:
+                break
+            k = self.manifest.get("port_rounds", 0)
+            plans = [{"parent": placeholder[0], "operator": "port", "applied": [], "knobs": {},
+                      "rationale": self.PORT_APPROACHES[(k * ports + i) % len(self.PORT_APPROACHES)]}
+                     for i in range(ports)]
+            self.manifest["port_rounds"] = k + 1
+            self.round(plans=plans)
+        return self.status(f"ports: {len(self.correct_nodes())} correct")
 
     def run(self, patience=3):
         best, stale = None, 0

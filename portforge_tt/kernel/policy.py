@@ -105,7 +105,8 @@ def parents(tree, beam, rng, chosen=None):
         "specialist": sorted(set(tree.specialists().values())),
     }
     if not any(pool.values()):
-        seeds = [n for n, node in tree.nodes.items() if node["operator"] in ("seed", "import") and tree.correct(n)]
+        seeds = [n for n, node in tree.nodes.items() if node["operator"] in ("seed", "import", "port")
+                 and tree.correct(n)]
         pool["frontier"] = seeds or [n for n, node in tree.nodes.items() if node["operator"] == "seed"]
     picked = []
     for _ in range(beam * 4):

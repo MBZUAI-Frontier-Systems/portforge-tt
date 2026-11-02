@@ -1,0 +1,294 @@
+{
+ "families": {
+  "looprestoration-wiener-8bpc": {
+   "project": "dav1d",
+   "signature": "dav1d",
+   "source_name": "kernel.S",
+   "neon_ukernel": "dav1d_wiener",
+   "wiring": "looprestoration",
+   "asm_path": "src/riscv/64/looprestoration.S",
+   "test": "looprestoration_8bpc",
+   "functions": "wiener_*",
+   "symbols": [
+    "dav1d_wiener_filter7_8bpc_rvv",
+    "dav1d_wiener_filter5_8bpc_rvv"
+   ],
+   "baseline": "C reference (no upstream RVV at the pinned revision)",
+   "bench_duration_us": 4000,
+   "context": [
+    {
+     "name": "reference_looprestoration_tmpl.c",
+     "path": "src/looprestoration_tmpl.c",
+     "lines": [
+      1,
+      388
+     ]
+    },
+    {
+     "name": "looprestoration.h",
+     "path": "src/looprestoration.h"
+    },
+    {
+     "name": "checkasm_looprestoration.c",
+     "path": "tests/checkasm/looprestoration.c"
+    },
+    {
+     "name": "arm64_looprestoration.S",
+     "path": "src/arm/64/looprestoration.S",
+     "lines": [
+      1,
+      966
+     ]
+    },
+    {
+     "name": "x86_looprestoration_avx2.asm",
+     "path": "src/x86/looprestoration_avx2.asm",
+     "lines": [
+      1,
+      700
+     ]
+    },
+    {
+     "name": "riscv_asm.S",
+     "path": "src/riscv/asm.S"
+    },
+    {
+     "name": "riscv_example_pal.S",
+     "path": "src/riscv/64/pal.S"
+    }
+   ],
+   "fv": {
+    "harness": "dav1d_wiener.c",
+    "entries": {
+     "7": "dav1d_wiener_filter7_8bpc_rvv",
+     "5": "dav1d_wiener_filter5_8bpc_rvv"
+    }
+   }
+  },
+  "refmvs-splat_mv": {
+   "project": "dav1d",
+   "signature": "dav1d",
+   "source_name": "kernel.S",
+   "neon_ukernel": "dav1d_splat_mv",
+   "wiring": "refmvs",
+   "asm_path": "src/riscv/64/refmvs.S",
+   "test": "refmvs",
+   "functions": "splat_mv*",
+   "symbols": [
+    "dav1d_splat_mv_rvv"
+   ],
+   "baseline": "C reference (no upstream RVV at the pinned revision)",
+   "bench_duration_us": 2000,
+   "context": [
+    {
+     "name": "reference_refmvs.c",
+     "path": "src/refmvs.c",
+     "lines": [
+      925,
+      968
+     ]
+    },
+    {
+     "name": "refmvs.h",
+     "path": "src/refmvs.h"
+    },
+    {
+     "name": "checkasm_refmvs.c",
+     "path": "tests/checkasm/refmvs.c",
+     "lines": [
+      296,
+      353
+     ]
+    },
+    {
+     "name": "arm64_refmvs.S",
+     "path": "src/arm/64/refmvs.S",
+     "lines": [
+      1,
+      96
+     ]
+    },
+    {
+     "name": "x86_refmvs.asm",
+     "path": "src/x86/refmvs.asm",
+     "lines": [
+      1,
+      361
+     ]
+    },
+    {
+     "name": "x86_refmvs_avx2_avx512.asm",
+     "path": "src/x86/refmvs.asm",
+     "lines": [
+      700,
+      930
+     ]
+    },
+    {
+     "name": "riscv_asm.S",
+     "path": "src/riscv/asm.S"
+    },
+    {
+     "name": "riscv_example_pal.S",
+     "path": "src/riscv/64/pal.S"
+    }
+   ],
+   "fv": {
+    "harness": "dav1d_splat_mv.c",
+    "entries": {
+     "": "dav1d_splat_mv_rvv"
+    }
+   }
+  },
+  "looprestoration-sgr3x3-8bpc": {
+   "project": "dav1d",
+   "signature": "dav1d",
+   "source_name": "kernel.S",
+   "neon_ukernel": "dav1d_sgr3x3",
+   "wiring": "sgr3x3",
+   "asm_path": "src/riscv/64/looprestoration.S",
+   "test": "looprestoration_8bpc",
+   "functions": "sgr_3x3*",
+   "symbols": [
+    "dav1d_sgr_filter_3x3_8bpc_rvv"
+   ],
+   "allowed_externs": [
+    "dav1d_sgr_x_by_x"
+   ],
+   "baseline": "C reference (no upstream RVV at the pinned revision)",
+   "bench_duration_us": 4000,
+   "context": [
+    {
+     "name": "reference_looprestoration_tmpl.c",
+     "path": "src/looprestoration_tmpl.c",
+     "lines": [
+      1,
+      43
+     ]
+    },
+    {
+     "name": "reference_sgr.c",
+     "path": "src/looprestoration_tmpl.c",
+     "lines": [
+      389,
+      818
+     ]
+    },
+    {
+     "name": "looprestoration.h",
+     "path": "src/looprestoration.h"
+    },
+    {
+     "name": "tables_sgr.c",
+     "path": "src/tables.c",
+     "lines": [
+      410,
+      460
+     ]
+    },
+    {
+     "name": "checkasm_looprestoration.c",
+     "path": "tests/checkasm/looprestoration.c"
+    },
+    {
+     "name": "arm64_sgr_driver.h",
+     "path": "src/arm/looprestoration.h",
+     "lines": [
+      250,
+      560
+     ]
+    },
+    {
+     "name": "arm64_looprestoration_sgr.S",
+     "path": "src/arm/64/looprestoration.S",
+     "lines": [
+      966,
+      1303
+     ]
+    },
+    {
+     "name": "arm64_looprestoration_common.S",
+     "path": "src/arm/64/looprestoration_common.S"
+    },
+    {
+     "name": "arm64_looprestoration_tmpl.S",
+     "path": "src/arm/64/looprestoration_tmpl.S"
+    },
+    {
+     "name": "x86_sgr_3x3_avx2.asm",
+     "path": "src/x86/looprestoration_avx2.asm",
+     "lines": [
+      1172,
+      1549
+     ]
+    },
+    {
+     "name": "x86_looprestoration_avx2_rodata.asm",
+     "path": "src/x86/looprestoration_avx2.asm",
+     "lines": [
+      1,
+      62
+     ]
+    },
+    {
+     "name": "riscv_asm.S",
+     "path": "src/riscv/asm.S"
+    },
+    {
+     "name": "riscv_example_pal.S",
+     "path": "src/riscv/64/pal.S"
+    }
+   ]
+  },
+  "loopfilter-uv-8bpc": {
+   "project": "dav1d",
+   "signature": "dav1d",
+   "source_name": "kernel.S",
+   "neon_ukernel": "dav1d_lpf_uv",
+   "wiring": "loopfilter_uv",
+   "asm_path": "src/riscv/64/loopfilter.S",
+   "test": "loopfilter_8bpc",
+   "functions": "lpf_*_sb_uv_*",
+   "symbols": [
+    "dav1d_lpf_h_sb_uv_8bpc_rvv",
+    "dav1d_lpf_v_sb_uv_8bpc_rvv"
+   ],
+   "baseline": "C reference (no upstream RVV at the pinned revision)",
+   "bench_duration_us": 2000,
+   "context": [
+    {
+     "name": "reference_loopfilter_tmpl.c",
+     "path": "src/loopfilter_tmpl.c"
+    },
+    {
+     "name": "loopfilter.h",
+     "path": "src/loopfilter.h"
+    },
+    {
+     "name": "lf_mask.h",
+     "path": "src/lf_mask.h"
+    },
+    {
+     "name": "checkasm_loopfilter.c",
+     "path": "tests/checkasm/loopfilter.c"
+    },
+    {
+     "name": "arm64_loopfilter.S",
+     "path": "src/arm/64/loopfilter.S"
+    },
+    {
+     "name": "x86_loopfilter_avx2.asm",
+     "path": "src/x86/loopfilter_avx2.asm"
+    },
+    {
+     "name": "riscv_asm.S",
+     "path": "src/riscv/asm.S"
+    },
+    {
+     "name": "riscv_example_pal.S",
+     "path": "src/riscv/64/pal.S"
+    }
+   ]
+  }
+ }
+}

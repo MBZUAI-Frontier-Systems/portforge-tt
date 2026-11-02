@@ -1,0 +1,15 @@
+{
+ "noise_floor": 0.01,
+ "reference_cell": "splat_mv_w8",
+ "cells": [
+  "splat_mv_w1",
+  "splat_mv_w2",
+  "splat_mv_w4",
+  "splat_mv_w8",
+  "splat_mv_w16",
+  "splat_mv_w32"
+ ],
+ "baseline": "C reference, timed in the same checkasm process (paired per round)",
+ "check": "checkasm --test=refmvs --function=splat_mv* at VLEN 128/256/512/1024 (G1), 8 more seeds at 128/1024 (G2), the X280 before timing; held-out seeds and the formal check at certification",
+ "noise_floor_basis": "A/A of one checkasm binary twice in a session, 8 rounds: per-cell ratio within 0.64% (2026-10-29)"
+}

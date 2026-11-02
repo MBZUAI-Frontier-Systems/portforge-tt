@@ -1,0 +1,122 @@
+{
+ "family": "refmvs-splat_mv",
+ "spec": {
+  "functions": "dav1d_splat_mv_rvv(refmvs_block **rr, const refmvs_block *rmv, int bx4, int bw4, int bh4)",
+  "formula": "for each of bh4 rows: r = rr[row] + bx4; r[x] = *rmv for 0 <= x < bw4 (refmvs_block is a packed 12-byte struct, 4-byte aligned)",
+  "domain": "bw4 in {1, 2, 4, 8, 16, 32}; 1 <= bh4 <= 32; bx4 a multiple of bw4; row pointers are independent (read each rr[row]: rows are not at a fixed stride); rmv 4-byte aligned; row bases 4-byte aligned (64 in practice)",
+  "width_bounds": [
+   "pure data movement: every byte written is a byte of *rmv",
+   "nothing outside r[0 .. bw4-1] of each of the bh4 rows may change",
+   "every VLEN from 128 to 1024; plain RVV 1.0 plus Zba/Zbb (the X280 has no Zbs)"
+  ],
+  "regimes": {
+   "bench": "checkasm --bench: one cell per width, splat_mv_w1 .. splat_mv_w32, over h from max(w/4,1) to min(4w,32)",
+   "check": "checkasm: every width, h from max(w/4,1) to min(4w,32), random bx4 offsets (multiples of w), random block contents"
+  }
+ },
+ "candidates": [
+  {
+   "id": "k:pattern-once",
+   "title": "Build the repeated 12-byte pattern once per call",
+   "application": "one vector register group holding *rmv repeated (vle32 of 3 words + vrgather with a precomputed i%3 index, or vslideup doubling), built before the row loop",
+   "expected_gain": "the per-row work is only stores",
+   "preconditions": [
+    "the pattern must start at the first byte of each row's r + bx4"
+   ],
+   "sources": [
+    "arm64 splat_mv_neon (ext into v0..v2)",
+    "x86 pshufb splat_mv_shuf"
+   ]
+  },
+  {
+   "id": "k:one-store-per-row",
+   "title": "One unit-stride store per row",
+   "application": "each row is a contiguous 12*bw4 bytes: store it with one vse8/vse32 when VLMAX allows (VLEN 512, e8 m8 = 512 bytes >= 384), else a short strip loop",
+   "expected_gain": "1 store + 1 pointer load per row",
+   "preconditions": [
+    "vl per row = 12*bw4 bytes (or 3*bw4 words)"
+   ],
+   "sources": [
+    "arm64 st1 of 3 registers"
+   ]
+  },
+  {
+   "id": "k:width-dispatch",
+   "title": "Dispatch on bw4 to a path per width",
+   "application": "a jump table or branch on bw4 (6 sizes) with a straight-line path per width, as arm64/x86 do",
+   "expected_gain": "no per-row vl computation; small widths avoid vector setup",
+   "preconditions": [
+    "dispatch only on bw4, never on data"
+   ],
+   "sources": [
+    "arm64 splat_tbl",
+    "x86 JMP_TABLE splat_mv_*"
+   ]
+  },
+  {
+   "id": "k:scalar-small",
+   "title": "Scalar stores for the narrowest widths",
+   "application": "bw4 = 1 or 2 (12 or 24 bytes): scalar sd/sw from three or six registers may beat vector setup",
+   "expected_gain": "lower fixed cost on w1/w2 cells",
+   "preconditions": [
+    "the hot path must stay vector for the wide cells (contract: no scalar port)"
+   ],
+   "sources": [
+    "arm64 10/20 paths use one 8-byte + one 4-byte store"
+   ]
+  },
+  {
+   "id": "k:row-unroll",
+   "title": "Unroll rows",
+   "application": "2-4 rows per iteration: load the next row pointers early, issue stores back to back",
+   "expected_gain": "hides the pointer-load latency on the in-order X280",
+   "preconditions": [
+    "bh4 may be odd"
+   ],
+   "sources": [
+    "catalogue multi-accumulator-unroll"
+   ]
+  },
+  {
+   "id": "vsetvl-hoist",
+   "application": "vtype and vl are the same for every row: set them once",
+   "expected_gain": "no vsetvli in the row loop",
+   "preconditions": [],
+   "sources": [
+    "catalogue"
+   ]
+  },
+  {
+   "id": "max-lmul",
+   "application": "LMUL 8 so one store covers a whole row",
+   "expected_gain": "fewer stores per row at small VLEN",
+   "preconditions": [],
+   "sources": [
+    "catalogue"
+   ]
+  },
+  {
+   "id": "avoid-gather",
+   "application": "build the pattern with slides instead of vrgather (gather cost grows with LMUL on the X280)",
+   "expected_gain": "cheaper setup for wide rows",
+   "preconditions": [],
+   "sources": [
+    "catalogue"
+   ]
+  },
+  {
+   "id": "tail-agnostic",
+   "application": "ta,ma: tail elements of the pattern register are dead",
+   "expected_gain": "",
+   "preconditions": [],
+   "sources": [
+    "catalogue"
+   ]
+  }
+ ],
+ "mined_from": [
+  "dav1d d7a83f6e: src/refmvs.c splat_mv_c, src/arm/64/refmvs.S splat_mv_neon, src/x86/refmvs.asm splat_mv (sse2/avx2/avx512icl), tests/checkasm/refmvs.c",
+  "the RVV catalogue",
+  "X280 facts"
+ ]
+}

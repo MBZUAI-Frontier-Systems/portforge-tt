@@ -5,6 +5,7 @@
 #   - riscv64 and aarch64 cross gcc 14 (same compiler release as the X280 Debian)
 #   - qemu-user (functional RVV at any VLEN; aarch64 to run the Neon source kernel)
 #   - cvc5 1.3.2 and SALTyRN's bounded-equivalence verifier (Neon vs RVV, SMT)
+#   - CBMC + z3 for portforge_tt/fv (lifted RVV machine code vs the C reference)
 #
 # Build on the x86 host:
 #   docker build -t portforge-rvv-host:0 targets/rvv/docker
@@ -49,6 +50,11 @@ RUN git clone -q https://github.com/keaganchern/SALTy-rn /opt/saltyrn \
  && python3 -m venv /opt/venv \
  && /opt/venv/bin/pip install -q libclang==18.1.1 \
  && /opt/venv/bin/pip install -q --no-deps -e /opt/saltyrn
+
+# CBMC (bounded model checker) and z3 for portforge_tt/fv: lifted machine code
+# checked against the project's own C reference (tag :1 and later)
+RUN apt-get update && apt-get install -y --no-install-recommends cbmc z3 \
+ && rm -rf /var/lib/apt/lists/* && cbmc --version
 
 ENV PATH=/opt/venv/bin:/opt/cvc5/bin:$PATH \
     CC=gcc-14 CXX=g++-14 \

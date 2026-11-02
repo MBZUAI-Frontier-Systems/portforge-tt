@@ -100,8 +100,9 @@ def analyze(rows, slots, candidate_slot, baseline_slots, delta=0.01, excluded=()
         entry = {"candidate_correct": cand_ok, "baseline_correct": bool(correct),
                  "candidate_ns": stats.summary([r["ns"] for r in cand_rows]).get("p50"),
                  "cycles_per_elem": cycles.get("p50"),
-                 "ipc": (stats.statistics.median(r["instret"] / r["cycles"] for r in cand_rows if r["cycles"])
-                         if any(r["cycles"] for r in cand_rows) else None)}
+                 "ipc": (stats.statistics.median(r["instret"] / r["cycles"] for r in cand_rows
+                                                 if r["cycles"] and r.get("instret"))
+                         if any(r["cycles"] and r.get("instret") for r in cand_rows) else None)}
         if not cand_ok:
             wrong.append(key)
         if not correct or key in excluded:

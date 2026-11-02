@@ -72,6 +72,9 @@ def main(argv=None):
         s.add_argument("--bench-rounds", type=int, default=15)
         s.add_argument("--patience", type=int, default=3, help="rounds without a 1%% frontier gain before stopping")
         s.add_argument("--agent", choices=["claude", "opencode", "codex"], default="claude")
+        s.add_argument("--placeholder", help="path of a stub source: port from scratch (no RVV exists) "
+                                              "before optimizing")
+        s.add_argument("--ports", type=int, default=4, help="independent ports per porting round")
     s = sub.add_parser("report")
     s.add_argument("run")
     args = p.parse_args(argv)
@@ -83,9 +86,13 @@ def main(argv=None):
     os.environ.setdefault("PORTFORGE_WORKER_BACKEND", args.agent)
     os.environ.setdefault("PORTFORGE_SUPERVISOR_BACKEND", args.agent)
     camp, run_dir = _campaign(args)
+    if args.placeholder:
+        camp.seed({"placeholder": args.placeholder}, "placeholder")
     camp.seed(_pairs(args.seed_kernel), "seed")
     camp.seed(_pairs(args.imports), "import")
     if args.cmd == "run":
+        if args.placeholder:
+            camp.port(ports=args.ports)
         camp.run(patience=args.patience)
     if args.cmd == "certify":
         camp.certify()

@@ -119,6 +119,15 @@ labelled as such).
   registry, the Neon ukernel it ports from, signature, init function, upstream RVV
   variants and whether the formal gate has a prepped Neon source.
 
+Assembly projects (`ports/dav1d-rvv`) use the same orchestrator through their adapter's
+`remote_<command>` functions: a candidate is one `.S` file, the adapter owns the wiring
+(init header, C init call, meson entry) in a pinned tree, G1/G2 are the project's checkasm
+under QEMU at VLEN 128-1024, the bench pairs each candidate with the C reference inside
+`checkasm --bench` on the X280, and certification adds held-out seeds and the formal check
+(`portforge_tt/fv`). For a function with no RVV anywhere, start from the family's
+`placeholder.S` (`--placeholder path`): a porting stage of independent ports, each told a
+different approach, runs until one passes G0-G2, then the search optimizes from the ports.
+
 Data-movement families (transposes) take no params: their regimes are call layouts
 (one call, XNNPACK's 32x32 operator sweep, padded views) over "WxH" shapes; see
 `kernels/x32-transposec/regimes.json`. A family may build from current upstream
@@ -178,3 +187,11 @@ the same timing rows, the speedup over upstream kernels correct at every VLEN ("
 and over the kernel XNNPACK dispatches on the X280 (`dispatched_x280` in families.json). Certify the
 frontier (held-out regimes, SMT where the family has a prepped Neon source, X280
 gtests, a second bench session) before calling anything a result.
+
+The formal check (`portforge_tt/fv`, any project): the built machine code is lifted
+(`lift.py`) into C over an RVV instruction model (`rvv_model.h`) and proved equal to the
+project's own C reference by CBMC on bounded sizes at every VLEN (`run.prove`), after a
+native co-simulation (`run.cosim`). The model is trusted only through its validation
+receipts (`python -m portforge_tt.fv.validate`: every modelled instruction against QEMU,
+and the X280 when allowed). A harness (`fv/harness/*.c`) states the domain and which bytes
+the kernel may read and write; it is reviewed once per family and never edited by agents.
