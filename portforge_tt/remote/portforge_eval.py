@@ -51,7 +51,7 @@ TT_HOST_FILES = ("runner.py", "telemetry.py", "opprofile.py") + EVALUATOR_FILES
 REFERENCE_MAX_REPEATS = 3
 # DEVICE_OPTIONS a backend may declare: ttnn.open_device keywords and their bounds.
 # (The printed open_device signature omits num_command_queues; the binding accepts it.)
-DEVICE_OPTION_BOUNDS = {"trace_region_size": (0, 128 * 1024 ** 2), "l1_small_size": (0, 128 * 1024),
+DEVICE_OPTION_BOUNDS = {"trace_region_size": (0, 256 * 1024 ** 2), "l1_small_size": (0, 128 * 1024),
                         "num_command_queues": (1, 2)}
 # Matmul-class ops as the dispatcher sees them (torch.matmul and linear decompose into these).
 HOST_MATMUL_OPS = ("aten.mm.", "aten.bmm.", "aten.addmm.", "aten.baddbmm.", "aten.addbmm.", "aten.mv.",

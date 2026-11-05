@@ -467,13 +467,15 @@ class ToolsTests(RunFixture):
         self.assertTrue(status['study']['progress']['background_nonblocking'])
 
     def test_perf_and_profile_jobs_use_the_trusted_job_path(self):
-        with patch.object(jobs.experiment, 'submit', return_value=support.future('future')) as remote:
+        with patch.object(jobs.experiment, 'submit', return_value=support.future('future')) as remote, \
+             patch.object(runtime, "job", return_value=lambda fn: SimpleNamespace(
+                 submit=lambda *a: support.future('future'))) as exclusive:
             perf = self.tools.evaluate('perf')
             profiled = self.tools.profile('bringup', precision='bfp8_b')
         requests = [json.loads((self.tools.run_dir / 'jobs' / r['job'] / 'request.json').read_text())
                     for r in (perf, profiled)]
         self.assertEqual([(r['kind'], r['stage']) for r in requests], [('evaluate', 'perf'), ('profile', 'bringup')])
-        self.assertEqual(remote.call_count, 2)
+        self.assertEqual((exclusive.call_count, remote.call_count), (1, 1))  # perf holds every card
         for bad in (lambda: self.tools.evaluate('full'), lambda: self.tools.profile('perf'),
                     lambda: self.tools.profile('smoke', precision='int8')):
             with self.assertRaises(ValueError):
@@ -520,6 +522,26 @@ class ToolsTests(RunFixture):
                 self.tools.run('python other.py')
                 single.assert_called_once()
                 self.assertNotIn('mesh_cards', single.call_args.args[2])
+
+    def test_timed_evaluations_hold_every_card_of_the_host(self):
+        cards = int(cluster.activated(self.tools.run_dir)['tt'].get('resources', {}).get('tt', 1))
+        with patch.object(jobs.experiment, 'submit', return_value=support.future('one')) as single, \
+             patch.object(runtime, "job", return_value=lambda fn: SimpleNamespace(
+                 submit=lambda *a: support.future('future'))) as job:
+            self.tools.evaluate('perf')
+            job.assert_called_once_with({'mesh': 1, 'tt': cards})
+            self.tools.evaluate('bringup')
+            single.assert_called_once()
+
+    def test_a_job_waiting_for_its_lease_reads_as_queued_not_lost(self):
+        from concurrent.futures import Future
+        waiting = Future()
+        with patch.object(runtime, "job", return_value=lambda fn: SimpleNamespace(submit=lambda *a: waiting)):
+            job = self.tools.evaluate('perf')['job']
+        status = self.tools.status(job_id=job)
+        self.assertIn('queued_or_running', json.dumps(status))
+        waiting.set_result({})
+        self.assertIn('saved_request_without_result', json.dumps(self.tools.status(job_id=job)))
 
     def test_invalid_profile_model_is_rejected_before_submission(self):
         with patch.object(jobs.experiment, 'submit') as remote:

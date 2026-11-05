@@ -240,6 +240,23 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class PackSeedTests(unittest.TestCase):
+    def test_pack_seed_source_is_copied_into_a_fresh_workspace(self):
+        pack = support.ROOT / "ports" / "chronos2"
+        with tempfile.TemporaryDirectory() as workspace, patch.dict(port.PORT, {"dir": pack}):
+            provenance = campaign.seed_pack_source(workspace)
+            copied = jobs.snapshot(workspace)
+        self.assertEqual(copied, jobs.snapshot(pack / "seed"))
+        self.assertIn("backend.py", copied)
+        self.assertIn("models/experimental/chronos_forecast/tt/model.py", copied)
+        self.assertEqual(provenance, {"pack_seed_sha256": jobs.code_hash(copied)})
+
+    def test_packs_without_a_seed_start_empty(self):
+        with tempfile.TemporaryDirectory() as workspace, patch.dict(port.PORT, {"dir": support.ROOT / "ports" / "esm2"}):
+            self.assertEqual(campaign.seed_pack_source(workspace), {})
+            self.assertEqual(list(Path(workspace).iterdir()), [])
+
+
 class PackageModeTests(unittest.TestCase):
     def test_launcher_checks_every_pack_suite_in_package_mode(self):
         # The launcher runs as portforge_tt.control.*, with neither remote/ nor the pack on sys.path.

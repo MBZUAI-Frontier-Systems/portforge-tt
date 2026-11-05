@@ -4,11 +4,12 @@ Read CONTRACT.md first. Target is `amazon/chronos-2` at the pinned revision:
 encoder-only T5-style backbone (12 layers, d_model 768, 12 heads, d_kv 64, ReLU
 FFN 3072), input patches of 16 with stride 16, RoPE (theta 10000), a register
 token, arcsinh input scaling, and a direct multi-patch quantile head (21
-quantiles, up to 64 output patches). Our required envelope is deliberately
-smaller than the model's maximum (context ≤512, horizon ≤64, batch 1–4,
-univariate); longer contexts and multivariate/covariate group attention are
-explicit out-of-scope extensions. Establish the FP32 package reference and a
-correct minimal TTNN implementation before optimization. Keep a short
+quantiles, up to 64 output patches). This round's envelope is TtChronos's own API (CONTRACT.md):
+contexts up to 2048, horizons up to 64, groups and covariates.
+
+The code you are improving is in the workspace (`models/experimental/chronos_forecast/`). Its
+history and measured savings are in `optimizations.md` there. Its tests and sweeps are at
+`/opt/tt-metal/models/experimental/chronos_forecast/{tests,sweeps}`. Keep a short
 RESEARCH.md with source URL, revision/date, relevant finding, and the
 experiment it motivates. Documentation describes possibilities; installed
 source and measured tests decide what actually works on this Blackhole runtime.

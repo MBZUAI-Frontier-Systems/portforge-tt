@@ -229,8 +229,16 @@ class PortTools(ToolServer):
         write_json(self.run_dir / 'jobs' / job / 'source.json', files)
         write_json(self.run_dir / 'jobs' / job / 'request.json', {**request, 'code_sha256': code_hash(files)})
         # A mesh job holds every card it leases; 'mesh' first (sorted order) so two never split the cards.
-        submit = (runtime.job({'mesh': 1, 'tt': PORT['mesh_cards']})(experiment._original).submit
-                  if request.get('stage') == 'mesh' or request.get('mesh_cards') else experiment.submit)
+        # Timed jobs (perf/mesh evaluations and profiles) hold every card of the host: a job beside
+        # them (a CPU-heavy probe, another evaluation) slows host prep and readback and skews the timing.
+        timed = request.get('stage') in ('perf', 'mesh') and request.get('kind', 'evaluate') in ('evaluate', 'profile')
+        if timed:
+            submit = runtime.job({'mesh': 1, 'tt': int(config['tt'].get('resources', {}).get('tt', 1))})(
+                experiment._original).submit
+        elif request.get('mesh_cards'):
+            submit = runtime.job({'mesh': 1, 'tt': PORT['mesh_cards']})(experiment._original).submit
+        else:
+            submit = experiment.submit
         self.refs[job] = submit(str(self.run_dir), job, {**request, 'files': files}, config)
         return {'job': job, 'status': 'running'}
 
@@ -333,6 +341,11 @@ class PortTools(ToolServer):
                                              'model': request.get('model', PORT['key']), 'suite_sha256': result['verdict']['suite_sha256'],
                                              'suite_definition_sha256': request['suite_definition_sha256']})
                 results[path.parent.name] = without_raw_samples(result)
+            elif job_id and path.parent.name in self.refs and not self.refs[path.parent.name].done():
+                # Live in this controller: waiting for its card lease (timed jobs run one at a time,
+                # each holding every card) or running. Never resubmit it.
+                results[path.parent.name] = {'status': 'pending', 'progress': {
+                    'phase': 'queued_or_running', 'note': 'waiting for its card lease or running; it will run'}}
             elif job_id:
                 results[path.parent.name] = {'status': 'pending', 'progress': {'phase': 'saved_request_without_result'}}
             else:

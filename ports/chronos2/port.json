@@ -2,7 +2,7 @@
  "schema_version": 1,
  "key": "chronos2",
  "title": "Chronos-2",
- "task": "probabilistic time-series forecasting (21 quantiles, single forward pass)",
+ "task": "probabilistic time-series forecasting (21 quantiles, single forward pass): make tt-metal chronos_forecast faster with its full API",
  "delivery_models": [
   "chronos2"
  ],
@@ -18,7 +18,7 @@
  ],
  "mesh_cards": 4,
  "corpus": {
-  "sha256": "f0b08df4fe80385da1d3e9a05e3779708c4e808b2da581aa974fea9505d64ae3",
+  "sha256": "e22aaed68e558fdffe239e765a1fa28baaccfb4adeaba75ec4fb69c6dd47699a",
   "file": "corpus.json"
  },
  "reference": {
@@ -29,5 +29,15 @@
   "imports": [
    "chronos"
   ]
- }
+ },
+ "optimization": {
+  "scenario": "offline",
+  "primary": "throughput",
+  "constraints": [
+   "p50_latency<=1.05*baseline",
+   "dram_bytes<=1.1*baseline"
+  ]
+ },
+ "objective": "Make Tenstorrent's own models/experimental/chronos_forecast (the seed in the workspace) faster at every measured cell without losing any feature or accuracy, and deliver the change as a plain diff of that package for an upstream tt-metal PR. The unmodified seed IS the baseline: evaluate it first at perf and mesh, both precisions. Do not run PyTorch CPU or ONNX baselines (they load the TT host's CPU and corrupt timings). Spend the budget on measured speedups, starting with token packing; package and document only in the final 40 minutes. Follow TASK.md.",
+ "precision_policy": "bf16 = TtChronosPrecision() and bfp8_b = TtChronosPrecision.performance(), both upstream presets. Any precision change inside them is declared in backend.py precision_policy exceptions and must keep every gate."
 }

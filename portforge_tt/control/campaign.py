@@ -2,7 +2,7 @@
 (controller.main) calls ``start``; from Python, ``campaign.start('ports/chronos2', 'my-cluster.yaml', hours=6)``.
 
 ``start`` validates the pack, the corpus and the cluster, creates ``runs/<UTC time>/`` with a fresh
-workspace (pack docs plus shared guides), freezes the harness (shared code plus the pack) into
+workspace (pack docs plus shared guides, and the pack's ``seed/`` source if it has one), freezes the harness (shared code plus the pack) into
 ``runs/<run>/harness`` and re-executes the controller from that frozen copy, so a run always replays
 the exact evaluator it was graded by. ``resume=<earlier run>`` continues an earlier campaign in a
 new run: its full workspace and STATE.md, its FP32 references and read-only job history, plus an
@@ -50,6 +50,19 @@ def check_suites(corpus, model):
         if suite.get('mesh_cards') != (PORT['mesh_cards'] if stage == 'mesh' else None):
             raise ValueError('port.json mesh_cards and the evaluator mesh suite disagree')
 
+
+
+def seed_pack_source(workspace):
+    """Copy the pack's starting source (``ports/<name>/seed/``, if any) into a fresh workspace."""
+    root = PORT['dir'] / 'seed'
+    if not root.is_dir():
+        return {}
+    files = snapshot(root)
+    for name, content in files.items():
+        target = safe_file(workspace, name)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content)
+    return {'pack_seed_sha256': code_hash(files)}
 
 
 def seed_workspace(workspace, seed_run, model, seed_job=None):
@@ -254,7 +267,8 @@ def start(port, cluster=None, *, hours=6, detach=True, corpus=None, model=None, 
     task.write_text('# Selected campaign model\n\nThis campaign targets ' + model_spec(model)['repo_id']
                     + ' (model key ' + model + '). This selection overrides size-specific defaults below.\n\n'
                     + task.read_text())
-    provenance = seed_workspace(workspace, seed_run, model, seed_job) if seed_run else {}
+    provenance = (seed_workspace(workspace, seed_run, model, seed_job) if seed_run
+                  else {} if resume else seed_pack_source(workspace))
     if resume:
         provenance = resume_workspace(workspace, resume, model,
                                       {role: agents[role]['backend'] for role in agents}, resume_note)

@@ -1,145 +1,118 @@
-# Chronos-2 backend contract
+# Chronos-2 contract: make upstream `chronos_forecast` faster, keep its whole API
 
-Write `backend.py` from scratch for pinned `amazon/chronos-2` (model key
-`chronos2`, Apache-2.0). Use configuration values rather than hardcoding
-architecture dimensions; the registry in `models.json` is authoritative.
+This round does not write a new port. The workspace starts with Tenstorrent's own Chronos-2
+package, `models/experimental/chronos_forecast` at tt-metal `f8f728b7627`, and a fixed user-level
+`backend.py` that drives it. The deliverable is a pull request to that package. Every speedup must
+live inside `models/experimental/chronos_forecast/`, so that `TtChronos` itself is faster for every
+caller.
+
+Upstream at this commit equals the seed except for one line: `ops/common.py` resolves kernel
+paths from its own directory, so the vendored kernels are the ones compiled.
+
+## Interface
+
+`backend.py` stays user code: load with `TtChronos.from_torch_model`, choose TT's preset
+(`TtChronosPrecision()` for `bf16`, `.performance()` for `bfp8_b`), call `prepare_inputs`,
+and replay through `TtChronosTraceRunner`. You may change it only:
+
+- to call a new public API that the package exposes and documents;
+- to tune `DEVICE_OPTIONS` (`trace_region_size` 0–256 MiB, `l1_small_size` 0–128 KiB,
+  `num_command_queues` 1–2);
+- to tune the documented L1 choice.
+
+Never move compute, caching or batching tricks into it.
 
 ```python
-def create_backend(weights_path, config, device, *, precision="bf16"):
-    # Return an object with the methods below. The harness owns the TTNN device.
-    ...
-
-class Backend:
-    # Required instance declaration; update it for the requested precision.
-    precision_policy = {"mode": "bf16", "weights": "bf16", "activations": "bf16",
-                        "accumulation": "fp32", "exceptions": []}
-
-    def forecast(self, past_values, past_observed_mask, prediction_length):
-        # CPU numpy float32 inputs [B,T] and [B,T]; 1.0 = observed, 0.0 = missing.
-        # Masked cells hold 0.0 placeholders; the reference maps them to the
-        # package's internal missing-value semantics (NaN) itself. Never mutate inputs.
-        # prediction_length is 1..64. Return CPU numpy float32:
-        # {"quantiles": [B, prediction_length, Q]} in the config's quantile order
-        # (21 native levels). Values are point forecasts, not samples; deterministic.
-        ...
+backend.forecast(past_values, past_observed_mask, prediction_length, group_ids=None, future_covariates=None)
+# past_values, past_observed_mask: float32 [B, T], 1 = observed (masked cells hold 0; the backend makes them NaN)
+# group_ids: int64 [B] or None (None: every row its own group). Rows of a group attend to each other.
+# future_covariates: float32 [B, prediction_length] or None; known future values, NaN for rows to forecast
+# returns {"quantiles": float32 [B, prediction_length, 21]}
 ```
 
-Load the pinned official safetensors checkpoint (CPU conversion and patch/value
-preparation are allowed); learned inference must run on TT. The public oracle
-comparison happens through the `chronos_forecasting` package's
-`Chronos2Pipeline.predict` (univariate, `inputs=[B,1,T]`, direct multi-patch
-output; no sampling). Batched rows must remain independent in the default mode:
-cross-learning/group attention across unrelated series rows is NOT part of this
-contract; a later multivariate/covariate extension is separate work with its own
-validation. Do not close/open another device.
-Optional `DEVICE_OPTIONS`: `trace_region_size` 0–128 MiB (potentially per bank),
-`l1_small_size` 0–128 KiB, `num_command_queues` 1–2. Return CPU-visible results.
-During calls, PyTorch learned ops on the host CPU are rejected; host matmuls
-pass only when no operand carries model weights (e.g. RoPE angles from positions).
+## The public API that must keep working
 
-Evaluation selects `bf16` (default), `fp32`, `fp16`, or `bfp8_b` explicitly and
-passes it to the factory. Declare actual dominant weight/activation formats,
-accumulation and every higher-precision exception in `precision_policy`; primary
-weight format and mode must match the request. Mixed activations require an
-explanation in `exceptions`. These are auditable declarations, not automatic
-proof of all tensor formats. Unsupported modes must fail clearly, never silently
-substitute another format. Installed TTNN may not expose native FP16. TT
-`bfloat8_b` is block floating point with shared exponents, **not IEEE FP8**.
-The reference pipeline exposes FP32 and BF16 only; the FP16 diagnostic study is
-therefore unavailable for this model.
+`TtChronos.from_torch_model`, `TtChronos.forward` and `prepare_inputs`/`upload_inputs`/
+`forward_device`/`postprocess_output`, `TtChronosTraceRunner` (`capture`, `execute`,
+`execute_pipelined`, `stream`, `release`), `TtChronosPrecision` and its presets, mesh
+(1×N data parallel), `group_ids`, `future_covariates`, contexts up to 2048 and horizons up to
+four 16-step patches.
 
-The immutable correctness oracle stays FP32 on the configured reference host
-(CUDA preferred; CPU allowed and recorded in the receipt). CUDA diagnostic
-comparisons replay identical smoke/bringup inputs in FP32/BF16; they do not
-replace that oracle or relax gates. Sensitive arithmetic (arcsinh scaling,
-patch normalization, quantile-head accumulation) is a legitimate place for
-declared FP32 exceptions with measured justification.
+- Keep signatures backward compatible. Add options with defaults rather than changing behaviour.
+- **No device state may outlive a public call** unless the caller opted into it and can release
+  it, as `TtChronosTraceRunner` does. A live trace overwrites buffers allocated after it.
+- Upstream's tests (`/opt/tt-metal/models/experimental/chronos_forecast/tests`, readable from
+  `port_run`) must still pass. The operator runs them on your final source.
 
-Required envelope: batch 1–1024 series per call on one card (1–4096 on the
-mesh stage), context up to 512 points, prediction length up to 64. Preserve
-masks, row order and repeated-call semantics.
+## Envelope and gates
 
-Two deployments are measured and ranked on separate frontiers:
+- **Accuracy:** max-row quantile NRMSE ≤ 0.04 against the official FP32 `Chronos2Model.forward` on
+  every numerical case, at `bf16` and `bfp8_b`.
+- **Consistency:** batch, single, reorder and group-isolation cases agree within ≤ 0.01.
+- **Determinism:** repeated identical calls are bit-identical.
+- **Cases** (BENCHMARK.md):
+  - contexts 17, 64, 65, 100, 160, 256, 512 and 2048;
+  - horizons 16, 32, 48 and 64;
+  - a constant series;
+  - groups of four aligned variates;
+  - one target with two known-future covariates.
+- **Perf (one card):** the bringup cases plus:
+  - context 512 at b1, 2, 4, 16, 64, 256 and 1,024;
+  - the paper shape (context 2048, b1,024), unique and in groups of four.
+- **Mesh (1×4):** b4, 6, 64, 256 and 1,024 at context 512, plus the paper-shape cases at
+  b1,024. It stops at 1,024 because TT's own encoder misses the gate at 4,096 (bfp8_b
+  0.040–0.042, grouped bf16 0.050).
+- **Full (held out, at submit):**
+  - windows of all ten series at contexts 64, 128, 512 and 2048;
+  - a seven-variate group;
+  - a covariate case;
+  - weighted quantile-loss inflation ≤ 2%.
 
-- **Single card** (`perf`): the bringup cases plus a batch sweep of 1, 2, 4,
-  16, 64, 256 and 1024 distinct series. Latency percentiles come from cases of
-  batch ≤4 (single-stream use); throughput, the best items/s on the sweep, is
-  where large batches count (offline use).
-- **Data parallel** (`mesh`): the same evaluation with `device` a 1×4
-  `MeshDevice` over four cards of one host, swept over 4, 6, 64, 1024 and 4096
-  series. Replicate weights to every card
-  (`ttnn.replicate_tensor_to_mesh_mapper`), split the batch along dim 0
-  (`ttnn.shard_tensor_to_mesh_mapper`), and gather with
-  `ttnn.concat_mesh_to_tensor_composer`. Batches that do not divide by the
-  card count (6) must still be exact: pad and drop the padding. Rows stay
-  independent; there is no chip-to-chip traffic. On one card `device` is a 1×1
-  `MeshDevice`, so the same backend serves both (`device.get_num_devices()`).
-  Board energy is summed over the four cards; DRAM is per card. Develop it with
-  `port_run(..., mesh=True)`, which exposes the same four cards so
-  `ttnn.open_mesh_device(ttnn.MeshShape(1, 4))` works in a probe. Quantile forecast
-error must be finite and max-row NRMSE ≤0.04 against the independent FP32
-reference on every numerical case. Batch/single/reorder/masked/revisit outputs
-for the same series must agree within max-row NRMSE ≤0.01 (float outputs are not
-required to match bitwise across different batch shapes, but repeated identical
-calls must be exactly deterministic). Quantile crossing may occur numerically and
-is reported, not gated.
+Not gated, because upstream cannot do them either; list them under limitations:
+- interior missing values: `prepare_inputs` accepts all-valid masks only;
+- context 1: TT's encoder gives NRMSE 0.09–0.13;
+- short contexts at large batch: at context 160 with 1,024–4,096 rows, TT's encoder's worst row
+  reaches 0.050–0.084, while 40 rows give 0.013.
 
-BASELINE BEFORE OPTIMIZATION: before any optimization claim, record measured
-baselines on the fixed suites from the same TT host — (a) PyTorch
-(chronos-forecasting, CPU) and, if it works in the installed stack, (b) an
-ONNX/forge path. Every speedup claim cites the matched baseline artifact
-(`baselines/` receipts), the same suite, precision and card. TT-vs-TT ratios
-never mix with CUDA context numbers.
+Context 17 at `bfp8_b` sits at 0.039 in TT's own encoder, so changes there have almost no
+accuracy margin.
 
-Benchmark rationale and corpus provenance: BENCHMARK.md. Develop progressively: `smoke` is one real-model numerical forecast (context
-512, horizon 64); `bringup` adds eight short batch/padding/mask/length-boundary/
-constant cases. Each has one warmup and one measured forecast. Run these before
-`full`: the frozen corpus windows (7 real ETTh1 series + 3 deterministic
-synthetic series; contexts 64/128/512, horizons 16/64, disjoint windows),
-behavior cases and revisits. Full additionally gates task-level weighted
-quantile-loss inflation ≤2% versus the FP32 reference forecasts on held-out
-futures. Timed numerical cases have three measured repetitions in full; other
-cases have one. Early passes are debugging milestones, never acceptance.
+The learned compute runs on TT. Host work allowed is non-learned arithmetic, as upstream already
+does it: instance norm, arcsinh and sinh, patching, masks, RoPE tables.
 
-For a successful smoke/bringup result, `verdict.passed` is `true` and
-`verdict.accepted` is `false`; only a successful full evaluation sets both true.
-Collect genuine results with `port_status(compact=True)`, which includes the
-structured verdict and request/source/cluster identity. `port_log` retrieves
-stdout/stderr only. The isolated `port_run` environment receives public
-inputs, not trusted verdicts or oracle outputs. Do not invent an authenticated
-receipt mount, copy oracle data into a backend, or treat candidate-authored pass
-flags as authority. Freeze the implementation before its real gates; preserve
-their job IDs outside source code so recording a result does not change the
-source hash. Performance claims must be checked against the controller's
-original requests and results.
+## What counts as faster
 
-The run sandbox mounts the controller's public `/models.json` registry and
-`/portforge_models.py` read-only, plus prepared `/input` files and routed `/weights`
-(config.json + model.safetensors). Inspect these with a bounded `port_run`
-before assuming a metadata schema. Registry entries contain official file
-hashes/sizes and architecture constraints.
+The first passing evaluation of each stage and precision is the **baseline**. Evaluate the
+unmodified seed first, at perf and mesh, at `bf16` and `bfp8_b`. That baseline is TT's best
+configuration:
 
-Timing includes array transfer, host control, learned compute and
-synchronization; excludes weight loading and progress-file writes. Report
-matched workload speedups, host RSS and allocator memory snapshots with their
-scopes. Do not call three samples a tail-latency SLA. Do not exploit known test
-inputs, precompute forecasts, run hidden CPU inference or alter the trusted
-evaluator. The full corpus is a small frozen sample for bounded research
-acceptance — not GIFT-Eval/fev-bench leadership, production certification,
-multivariate/covariate support, streaming or commercial SLAs.
+- its trace runner;
+- its `performance()` preset at `bfp8_b`;
+- L1 chunks from 16 series per chip.
 
-## tt-metal deliverable
+A candidate counts only if, against that baseline at the same precision and stage:
 
-The final artifact must be a production-style tt-metal model package suitable
-for an upstream PR to `tenstorrent/tt-metal` under `models/experimental/chronos2`
-(follow the layout of existing model demos such as ModernBERT, SpeechT5 and the
-time-series bring-ups): `tt/` (TTNN implementation), `demo/` (standalone
-forecast CLI: CSV in → quantile CSV out, with explicit checkpoint/device/
-precision arguments), `reference/` (FP32 torch reference utilities),
-`tests/` (pytest, importable without sandbox mounts, configurable fixtures),
-`benchmarks/` (reproducible measurement scripts), `docs/`, top-level README with
-model card links, measured evidence and limitations; SPDX headers on source
-files; no vendored third-party code without license attribution (Apache-2.0
-compatible only). The worker prepares branch, commit message and PR body; the
-human operator reviews, signs (DCO) and submits — the agent never pushes or
-opens the PR itself.
+- **no cell is slower:** every sweep case's p50 and the b≤4 latencies are compared, not just
+  the best throughput;
+- **device memory does not grow:** at most +10%;
+- **all gates pass.**
+
+Report every cell, wins and ties. Never claim a number that one same-source job does not show.
+
+## Deliverable
+
+At the end, the source tree under `models/experimental/chronos_forecast/` must be ready to
+replace upstream's files one to one:
+
+- SPDX headers;
+- no sandbox paths;
+- tests for every new code path, including:
+  - short contexts at large batch;
+  - an explicit `context_mask`;
+  - two models on one device;
+  - a user tensor allocated between calls;
+- `README.md` and `optimizations.md` updated with measured before/after numbers and job ids, in
+  the style of their existing ranked table.
+
+Prepare a PR title and body. The operator reviews, re-measures, opens the PR and pushes.
+Agents never push.

@@ -1,90 +1,134 @@
-# Chronos-2 → Blackhole port
+# Chronos-2: make Tenstorrent's `chronos_forecast` faster everywhere
 
-Build one correct, fast, configurable TTNN implementation for `amazon/chronos-2`
-(119.5M parameters, encoder-only, Apache-2.0), packaged in tt-metal style for an
-upstream `tt-metal` PR. Read CONTRACT.md for the exact interface and acceptance
-envelope; read LESSONS.md before the first device job — those mistakes are
-expensive to repeat. Use public research and the pinned installed source.
+The workspace holds upstream `models/experimental/chronos_forecast` and a user-level `backend.py`
+(CONTRACT.md). Make `TtChronos` faster at every measured cell without losing any feature: groups,
+covariates, context 2048, mesh, trace runner. The budget is short, about three hours, so work
+from the evidence below rather than rediscovering it.
 
-1. Read TT_GUIDE.md, SOURCES.md, BENCHMARK.md and LESSONS.md; inspect the installed chronos
-   package (if present), TTNN transformer implementations and the pinned
-   checkpoint. Save concise findings and citations in RESEARCH.md. Explain
-   patching, positions/RoPE, masking, reg token, scaling (arcsinh),
-   output-patch quantile head and precision choices before implementing.
-2. BASELINE FIRST: measure and preserve baselines on the fixed suites from the
-   TT host — PyTorch (chronos-forecasting CPU) and, if the installed stack
-   allows, an ONNX/forge path. Record BASELINE_*.md with commands, samples and
-   job receipts. All later optimization claims compare against these matched
-   numbers; a speedup without a recorded baseline is invalid.
-3. Write backend.py and useful component checks. Use `port_run` for isolated
-   experiments and source inspection. Python, PyTorch and TTNN already exist;
-   the installed TT-Metal tree is `/opt/tt-metal`. The pinned checkpoint is
-   mounted under `/weights`. Do not install packages or reset devices.
-4. Run `port_evaluate(stage="smoke")` for one short real-model request. An
-   independent FP32 reference runs on the configured reference host (CUDA
-   preferred; CPU recorded). Use `port_status(compact=True)` to collect
-   asynchronous results; retain job IDs. Inspect the failed phase, fix one
-   hypothesis, and avoid duplicate pending jobs.
-5. Pass `bringup` before optimizing. Preserve that source and job as the TT
-   baseline anchor. Profile where time and memory go, investigate public
-   optimization techniques (traces, batching, layout/sharding), then compare
-   changes on identical workloads and settings against the recorded baselines.
-   Seek substantial measured gains; there is no required speedup target to game.
-   Start with explicit BF16 and compare FP32 when diagnosing numerical
-   failures; investigate BFP8_B separately as a block-float experiment.
-   Declare precision exceptions and accumulation policy. Never disguise a
-   precision change as a same-precision speedup. CUDA FP32/BF16 references
-   provide additional context.
-   Optimize both deployments CONTRACT.md defines. On one card, the `perf`
-   sweep runs up to 1024 series per call: keep small-batch latency and raise
-   large-batch throughput (fold the batch into matmul M, keep activations
-   resident, size grids and blocks for large M). Then run the same backend data
-   parallel on the four-card `mesh` stage and make it scale. Each stage has its
-   own frontier; a large-batch gain must not cost small-batch latency unnoticed.
-6. Write REPORT.md with correctness evidence, reproducible commands, baseline
-   versus optimized latency and memory, limitations and sources. Keep STATE.md
-   short: completed work, current hypothesis, pending job IDs, next action.
-7. Produce the tt-metal-style deliverable from CONTRACT.md: importable,
-   configurable backend; standalone forecast CLI; portable tests that import
-   actual code and accept configurable fixtures rather than execute Markdown or
-   require the sandbox's `/input` and `/weights`; package layout with SPDX headers.
-   Prepare the branch name, commit message and PR body early (lesson: GitHub
-   submission access was discovered missing at the END last time); the human
-   operator reviews, signs and submits the PR.
-8. Establish repeated-request memory behavior with bounded diagnostics. If a
-   runtime investigation blocks full validation, advance independent precision,
-   API or packaging work; do not spend consecutive turns only restating
-   readiness. Do not repeat device experiments solely because a log was
-   truncated: page it using `port_log`.
-9. Call `port_submit` when the current source passes bringup and is ready.
-   This freezes it for the independent full corpus. Full acceptance is not
-   guaranteed.
+`prior_art/` holds our earlier standalone fast path, read-only reference code: `tt/fast_path*.py`
+and `ops/split_rope`. It beat this package at bf16 from b64 up and at bfp8_b at b64, but lost at
+bfp8_b b4, single-card b1,024 and on four cards. It also had bugs, so learn from its mechanisms
+and do not copy it whole:
 
-Only `port_write` persists edits; files written by a remote shell are
-job-local. Native opencode filesystem access is read-only (edit/exec are denied
-in the agent config); the separately authorized `port_write` service
-enforces the allowed source paths. Use it for
-permitted edits and STATE/REPORT, retaining any actual denial. CPU-only checks
-use bounded `port_run` jobs on the TT host without opening a TT device; no
-separate local runner is required. An empty compact status means no current user
-jobs, not missing tools. Supervisors should say "no TT device
-opens/evaluations/timings" when permitting CPU development, rather than
-ambiguously banning every job. `port_files/read/write/run/evaluate/status/
-log/submit` are your workflow tools. Each run has an exclusive card lease;
-independent diagnostic jobs can use different healthy cards. Read truncated
-stdout/stderr with `port_log(job_id, offset_bytes=0)` and continue using
-`next_offset_bytes`; do not repeat experiments to recover logs. Keep state
-within about eight minutes — a strong target, not a hard rule: overrun only for clearly
-promising in-flight work, after appending a one-line progress checkpoint to STATE.md (the
-runtime hard cap is thirty minutes per turn): the supervisor starts fresh bounded turns using your saved
-files. Do useful work while jobs run; do not spend a turn sleeping or launching
-duplicate tests. Keep mutable notes in Markdown, because code/configuration
-changes invalidate earlier correctness results.
+- It segfaulted on short contexts. `ttnn.slice` over the full range returns its input, and
+  deallocating the input freed the result.
+- Its program configs were tuned only for S=37 and hit L1 clashes elsewhere.
+- Its live trace overwrote later allocations.
 
-Compute must remain on TT, with real weights and input-dependent outputs.
-Preserve masks, patch boundaries, scaling, row independence and repeated-call
-determinism. Do not exploit the dataset, bypass tests, cache answers, or change
-the contract. Optimize transferable inference behavior, including awkward
-shapes and repeated calls. A good engineering result explains failures and
-unsupported cases honestly; report the unsupported envelope (longer contexts,
-multivariate/covariate modes) explicitly instead of implying coverage.
+## Order
+
+0. **No CPU or ONNX baselines, no packaging first.** The seed is the baseline. CPU-heavy jobs on
+   the TT host corrupt every timing. Perf, mesh and profile jobs hold every card while they run,
+   so queue them deliberately. Do not build `tests/`, `demo/` or docs before a perf receipt shows
+   a win.
+1. **Baseline first.** Evaluate the unmodified seed:
+   - `port_evaluate` smoke, then bringup;
+   - perf and mesh at `bf16` and `bfp8_b`.
+
+   Record each cell in BASELINE.md with job ids. If an upstream case fails a gate, stop and
+   report it; do not "fix" the evaluator.
+2. **Profile.** Run `port_profile` on `sweep-b1024` and `paper-b1024` at both precisions. Find
+   what dominates per op.
+3. **Optimize single card at context 512** (most cells), one lever at a time, starting with
+   lever 1 (token packing): it attacks the largest measured waste. Keep a lever only
+   when no cell regresses (CONTRACT.md); record each attempt in TRANSFORMS.json.
+4. **Paper shape and groups:** confirm the gains hold at context 2048 and in groups of four.
+5. **Mesh:** improve 4-card scaling.
+6. **Deliverable:**
+   - tests for new paths, plus the regression tests named in CONTRACT.md;
+   - README and `optimizations.md` rows with job ids;
+   - a PR title and body.
+
+   With about 40 minutes left: freeze, re-run perf and mesh at both precisions, and
+   `port_submit`.
+
+## What the seed measures (operator precheck, 2026-11-02)
+
+These come from the same backend on this host, outside the harness. Your harness baseline is
+the authority.
+
+| Precision | Cards | b1 | b4 | b64 | b1,024 | paper b1,024 | paper groups-4 b1,024 |
+|---|---|---|---|---|---|---|---|
+| bfp8_b | 1 | 2.17 ms | 1,575/s | 5,697/s | 12,270/s | 5,305/s | 3,412/s |
+| bf16 | 1 | 2.32 ms | 1,408/s | 5,896/s | 8,230/s | 3,613/s | 2,171/s |
+
+On the 4-card mesh, b1,024 (the mesh stage's largest batch) runs at 28,206/s (bfp8_b) and
+23,322/s (bf16), about 2.3× and 2.8× one card. At 4,096 rows TT's encoder misses the accuracy gate,
+so the mesh stage stops at 1,024.
+
+Every gated case passes at both precisions. The tightest is context 17 at bfp8_b, at 0.0392.
+
+There is an upstream accuracy bug worth fixing if you have time, because a fix is a real PR item.
+At context 160 / horizon 32 with 1,024 rows, the worst row reaches 0.050 at bf16 and 0.084 at
+bfp8_b, against 0.013 with 40 rows. It is not gated; check it with a `port_run` probe.
+
+Small grouped calls are slow: 8 rows in groups of four take 8.6–11 ms, against 2.5 ms for 2
+unique rows.
+
+## Levers, ranked by evidence
+
+1. **Token packing on the time axis.**
+   - The gap: at context 512 and horizon 64 a series has 37 tokens and is padded to 64, so 42%
+     of every matmul and SDPA row is padding. At context 160 / horizon 32, 13 tokens are padded
+     to 32.
+   - The idea: put several series in one tile-padded sequence, with a block-diagonal time
+     mask and per-series RoPE positions. Our earlier port gained +21% at bf16 from this (packing
+     up to six 37-token series into 224). See `prior_art/tt/fast_path_ops.py` (segment map, RoPE
+     offsets, packing plan).
+   - Use it only when packing saves at least 25% of tokens. The paper shape (133 → 160) gains
+     little.
+   - It must compose with their L1 series chunks: a chunk holds whole packed sequences. It must
+     also compose with group blocks: pack only unique-group rows, or whole groups.
+2. **Group attention with unique groups is an identity mix.** Each row sees only itself, so the
+   sublayer is `x + W_o W_v RMSNorm(x)`. Upstream already skips the mask (diagonal path). Fold
+   `W_o·W_v` into one d×d linear on the host when every group is unique; this saves about 7% of
+   FLOPs.
+3. **Batch-gated fidelity.** HiFi2 on wo, ff_up and ff_down only above batch 4 kept accuracy in
+   our port. Upstream's presets do not depend on batch.
+4. **Small batch (b1–b4) uses the non-L1 path.** Our 1D in0-mcast grid widening (24 → 72–96
+   cores at Mt ≤ 2) helped there. Upstream b1 is already about 2.1 ms, so measure before
+   keeping anything.
+5. **L1 chunk budgets for this grid.** `TtChronos` warns that its `_L1_CHUNK_TOKENS_*` were
+   measured on an 11×10 worker grid, and these cards have 13×10. Re-measure them with
+   `/opt/tt-metal/models/experimental/chronos_forecast/sweeps/sweep_l1_chunk.py` (through
+   `port_run`). Make the budget follow the grid, not a constant.
+6. **Mesh:**
+   - b1,024 reaches 2.3× one card at bfp8_b. The timing includes host arrays in and out, so the
+     host prep, the readback and the unscale dominate.
+   - Host prep and readback dominate. Overlap them with replay (`execute_pipelined`, `stream`),
+     and avoid per-chip host round trips.
+   - Row-major split before tilize is already done.
+
+## Known losers (do not retry)
+
+- **Accuracy:**
+  - LoFi on QKV, FF-up or SDPA beyond what `performance()` already uses pushed max-row NRMSE
+    over 0.04;
+  - bfp4 weights;
+  - SDPA chunk 64;
+  - our custom RMSNorm kernels.
+- **Slower:**
+  - sharded `rms_norm` (layout conversions cost more than the norm);
+  - DRAM-sharded matmul at b≤4;
+  - K-split FF-down (2.6–3.7× slower);
+  - grid gy4 at large M;
+  - SDPA pass sizes 168 and 224;
+  - threaded host overlap on the mesh.
+- **Already in upstream:**
+  - batch folded into M;
+  - L1 chunks;
+  - fused QKV head split + RoPE;
+  - bank-local add;
+  - bf8 RMSNorm output;
+  - LoFi attention in `performance()`;
+  - two-CQ input refresh.
+
+## Working rules
+
+- Read CONTRACT.md, LESSONS.md and UPSTREAM_PR.md first.
+- Only `port_write` persists edits. Files over 24 KB (`tt/model.py`) need your native Read with
+  an offset; `port_read` truncates.
+- Keep STATE.md short: done, current hypothesis, pending job ids, next action.
+- Read logs with `port_log` paging; do not rerun jobs to recover them.
+- Compute stays on TT with real weights. Never exploit the corpus, cache answers or change the
+  evaluator.

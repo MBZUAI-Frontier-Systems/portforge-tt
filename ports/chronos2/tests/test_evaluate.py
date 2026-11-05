@@ -181,6 +181,8 @@ class SuiteTests(unittest.TestCase):
     def synthetic_corpus(cls):
         series = {key: [float((j * 37 + i * 11) % 97) / 7.0 for j in range(1536)]
                   for i, key in enumerate(cls.KEYS)}
+        series.update({key + "_long": [float((j * 31 + i * 13) % 89) / 5.0 for j in range(4352)]
+                       for i, key in enumerate(cls.KEYS[:7])})
         return {"schema_version": 1, "task": "synthetic fixture",
                 "protocol": "synthetic fixture", "sources": [],
                 "series": series}
@@ -207,22 +209,26 @@ class SuiteTests(unittest.TestCase):
     def test_sweeps_reach_the_offline_envelope_with_distinct_rows(self):
         corpus = json.loads(shipped_corpus(self).read_text())  # real series: synthetic ones repeat
         for stage, cards, top in (("perf", None, evaluate.MAX_BATCH),
-                                  ("mesh", evaluate.MESH_CARDS, evaluate.MESH_CARDS * evaluate.MAX_BATCH)):
+                                  ("mesh", evaluate.MESH_CARDS, evaluate.MESH_MAX_BATCH)):
             spec, labels = evaluate.make_suite(corpus, stage, "chronos2")
             evaluate.portforge_eval.check_suite(spec)
             self.assertEqual(spec.get("mesh_cards"), cards)
             sweep = [case for case in spec["cases"] if case.get("batch")]
             self.assertEqual(max(case["batch"] for case in sweep), top)
+            self.assertEqual({case["context"] for case in sweep}, {512, 2048})
             for case in sweep:
                 self.assertEqual(len(case["series"]), case["batch"])
                 self.assertEqual(len(case["starts"]), case["batch"])
                 self.assertEqual(len(labels[case["name"]]), case["batch"])
-                self.assertTrue(set(case["series"]) <= set(evaluate.SWEEP_SERIES))
-                rows = {tuple(evaluate.series_window(corpus["series"][key], 512, 64, 0, start)[0])
+                if "groups" in case:  # groups of four aligned variates, each group one window
+                    self.assertEqual(case["groups"], [i // 4 for i in range(case["batch"])])
+                    continue
+                self.assertTrue({key.removesuffix("_long") for key in case["series"]} <= set(evaluate.SWEEP_SERIES))
+                rows = {tuple(evaluate.series_window(corpus["series"][key], case["context"], case["horizon"], 0, start)[0])
                         for key, start in zip(case["series"], case["starts"])}
                 self.assertEqual(len(rows), case["batch"])
         bringup, _ = evaluate.make_suite(corpus, "bringup", "chronos2")
-        self.assertFalse(any("starts" in case or case.get("batch") for case in bringup["cases"]))
+        self.assertFalse(any(case.get("batch") for case in bringup["cases"]))
 
     def test_suite_identity_rejects_tampering_and_missing_version(self):
         spec, _ = self.suite("smoke")
@@ -280,11 +286,14 @@ class SuiteTests(unittest.TestCase):
     def test_bringup_coverage_and_comparisons(self):
         spec, _ = self.suite("bringup")
         cases = {c["name"]: c for c in spec["cases"]}
-        self.assertEqual(len(cases), 8)
-        self.assertEqual(cases["masked-tail"]["mask"], {"tail": 16})
+        self.assertEqual(len(cases), 15)
+        self.assertFalse(any(c["mask"] for c in cases.values()))  # TtChronos takes all-valid contexts only
         self.assertEqual(cases["reverse"]["compare_rows"], [1, 0])
         self.assertEqual(cases["single0"]["compare_rows"], [0])
-        self.assertEqual({c["context"] for c in cases.values()}, {64, 65, 512})
+        self.assertEqual({c["context"] for c in cases.values()}, {17, 64, 65, 100, 160, 256, 512, 2048})
+        self.assertEqual({c["horizon"] for c in cases.values()}, {16, 32, 48, 64})
+        self.assertEqual(cases["groups4"]["groups"], [0, 0, 0, 0, 1, 1, 1, 1])
+        self.assertEqual(cases["covariates"]["covariate_rows"], [1, 2])
         for case in cases.values():
             self.assertTrue(case["numerical"])
             self.assertLessEqual(case["horizon"], 64)
@@ -296,13 +305,13 @@ class SuiteTests(unittest.TestCase):
         spec, labels = self.suite("full")
         quality = [c for c in spec["cases"] if c.get("quality")]
         self.assertGreaterEqual(len(quality), 25)
-        self.assertEqual({c["context"] for c in spec["cases"]}, {64, 128, 512})
+        self.assertEqual({c["context"] for c in spec["cases"]}, {64, 128, 512, 2048})
         self.assertEqual({c["horizon"] for c in spec["cases"]}, {16, 64})
         for case in spec["cases"]:
-            future = labels[case["name"]][0]
-            series = self.corpus["series"][case["series"][0]]
-            start = case["window"] * (case["context"] + case["horizon"]) + case["context"]
-            self.assertEqual(future, series[start:start + case["horizon"]])
+            for row, key in enumerate(case["series"]):
+                series = self.corpus["series"][key]
+                start = case["window"] * (case["context"] + case["horizon"]) + case["context"]
+                self.assertEqual(labels[case["name"]][row], series[start:start + case["horizon"]])
         self.assertTrue(any(c["name"] == "revisit" and "compare_to" in c for c in spec["cases"]))
         self.assertEqual(spec["gates"], evaluate.GATES)
         self.assertEqual(spec["timed_repeats"], 3)
@@ -313,7 +322,7 @@ class SuiteTests(unittest.TestCase):
         for case in spec["cases"]:
             if "compare_to" in case:
                 continue
-            if not case["name"].endswith(("-w0", "-w1", "-w2")):
+            if not case["name"].endswith(("-w0", "-w1", "-w2", "-w3")):
                 continue
             for key in case["series"]:
                 start = case["window"] * (case["context"] + case["horizon"]) + case["context"]
@@ -560,6 +569,73 @@ class AssessmentTests(unittest.TestCase):
         self.assertEqual(evaluate.quantile_nrmse(a, b), 0.0)
         with self.assertRaises(ValueError):
             evaluate.quantile_nrmse(np.array([[[np.inf, 1.0]]]), b)
+
+
+class UpstreamApiTests(unittest.TestCase):
+    """Groups, covariates and the model-forward oracle of the upstream-replacement round."""
+
+    def test_group_chunks_never_split_a_group(self):
+        self.assertEqual(evaluate.group_chunks(None, 10, 4), [(0, 4), (4, 8), (8, 10)])
+        self.assertEqual(evaluate.group_chunks([0, 0, 0, 1, 1, 1, 2, 2], 8, 4), [(0, 3), (3, 6), (6, 8)])
+        self.assertEqual(evaluate.group_chunks([0] * 7, 7, 4), [(0, 7)])  # one oversized group stays whole
+        self.assertEqual(evaluate.group_chunks([i // 4 for i in range(1024)], 1024, 256)[1], (256, 512))
+
+    def test_candidate_receives_groups_and_known_futures(self):
+        import numpy as np
+        corpus = SuiteTests.synthetic_corpus()
+        spec, _ = SuiteTests.suite(SuiteTests(), "bringup", corpus)
+        case = next(c for c in spec["cases"] if c["name"] == "covariates")
+        inputs = evaluate.case_inputs_arrays(corpus["series"], case)
+        self.assertTrue(np.isnan(inputs["future_covariates"][0]).all())  # the target's future is unknown
+        self.assertFalse(np.isnan(inputs["future_covariates"][1:]).any())
+        seen = {}
+
+        class Backend:
+            def forecast(self, values, mask, horizon, group_ids=None, future_covariates=None):
+                seen.update(groups=group_ids, known=future_covariates)
+                return {"quantiles": np.zeros((len(values), horizon, len(evaluate.QUANTILES)), np.float32)}
+
+        class Univariate:  # an older backend without group or covariate arguments
+            def forecast(self, values, mask, horizon):
+                return {"quantiles": np.zeros((len(values), horizon, len(evaluate.QUANTILES)), np.float32)}
+
+        single = next(c for c in spec["cases"] if c["name"] == "batch")
+        evaluate.forward_case(Univariate(), single, evaluate.case_inputs_arrays(corpus["series"], single), spec, {})
+        outputs, supplied = evaluate.forward_case(Backend(), case, inputs, spec, {})
+        self.assertEqual(seen["groups"].tolist(), [0, 0, 0])
+        np.testing.assert_array_equal(seen["known"], inputs["future_covariates"])
+        self.assertEqual(set(supplied), set(inputs))
+        self.assertEqual(outputs["quantiles"].shape, (3, 64, len(evaluate.QUANTILES)))
+
+    def test_oracle_calls_the_model_forward_on_whole_groups(self):
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch not installed")
+        import numpy as np
+        calls = []
+
+        def model(context, num_output_patches, group_ids=None, future_covariates=None):
+            calls.append(dict(rows=context.shape[0], patches=num_output_patches, groups=group_ids,
+                              known=future_covariates, nan=int(torch.isnan(context).sum())))
+            out = torch.arange(context.shape[0], dtype=torch.float32)[:, None, None].expand(
+                -1, len(evaluate.QUANTILES), num_output_patches * evaluate.PATCH)
+            return SimpleNamespace(quantile_preds=out)
+
+        rows, horizon = 600, 40
+        arrays = dict(past_values=np.ones((rows, 32), np.float32), past_observed_mask=np.ones((rows, 32), np.float32),
+                      group_ids=np.repeat(np.arange(rows // 3), 3), future_covariates=np.ones((rows, horizon), np.float32))
+        arrays["past_observed_mask"][5, :4] = 0
+        with patch.object(evaluate, "REFERENCE_BATCH", 256):
+            result = evaluate.oracle_forward(torch, model, arrays, horizon, "cpu")
+        self.assertEqual(result.shape, (rows, horizon, len(evaluate.QUANTILES)))
+        self.assertEqual([c["rows"] for c in calls], [255, 255, 90])  # multiples of the group size
+        self.assertEqual(calls[0]["patches"], 3)
+        self.assertEqual(calls[0]["nan"], 4)  # masked cells become NaN
+        self.assertEqual(calls[1]["groups"].min().item(), 0)  # renumbered per chunk
+        self.assertEqual(tuple(calls[0]["known"].shape), (255, 48))  # padded to whole patches with NaN
+        self.assertTrue(torch.isnan(calls[0]["known"][:, horizon:]).all())
+        self.assertEqual(result[300, 0, 0], 300 - 255)  # rows come back in order
 
 
 if __name__ == "__main__":

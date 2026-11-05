@@ -24,4 +24,18 @@ Every Python file:
 - has no hard-coded sandbox paths (`/weights`, `/input`, `/output`, `/work`); take paths as arguments or fixtures;
 - contains no vendored third-party code unless it has license attribution (Apache-2.0 compatible).
 
+When the PR improves an existing upstream port, its claims must survive a hostile review:
+
+- **Baseline:** compare against upstream's best documented configuration (presets, opt-in
+  flags such as L1 chunking, their trace runner), not its constructor defaults. First reproduce a
+  number upstream publishes in its own README within 10%; if you cannot, the baseline is wrong.
+- **Same harness, one run:** every number in the PR body and README comes from one measurement run
+  of both implementations; state the job or log it came from.
+- **Tested envelope:** any routing or dispatch condition (context length, horizon, batch, groups)
+  covers only shapes that tests exercise; sweep the edges (shortest and longest inputs, every
+  horizon) at both small and large batch.
+- **Library semantics:** no device state survives a public call unless the user opts in and can
+  release it (a live trace overwrites buffers allocated after it). Memory figures count everything
+  the public object holds.
+
 The worker prepares the branch name, commit message and PR body. The human operator reviews, signs (DCO) and opens the PR; agents never push.

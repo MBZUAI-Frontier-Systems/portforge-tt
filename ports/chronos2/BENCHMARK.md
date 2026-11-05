@@ -16,30 +16,46 @@ measured only at the full gate, and only as *agreement with the FP32 reference*
 | `syn_sine_mixed` | deterministic: 168/24-hour sines + seeded noise (`Random(1729)`) | Smooth doubly-periodic signal; easy to eyeball, checks that periodic structure survives patching. |
 | `syn_arcsinh_stress` | deterministic: `sinh(4·sin)` + tiny noise (`Random(4104)`) | Alternating tiny/huge magnitudes (|x| up to ~27). Directly stresses `use_arcsinh` scaling, FP range behavior and BFP8_B shared-exponent loss. |
 | `syn_constant` | `7.0` × 1536 | Degenerate input: zero variance after normalization; catches NaN/div-by-zero paths in scaling and quantile heads. |
+| `etth1_*_long` (7) | ETTh1, last 4352 hourly rows of the same columns, values rounded to 6 decimals (the 1536-point tails are their last rows) | Context 2048, the shape of TT's own benchmark, and aligned variates for group and covariate cases. |
 
 All values are frozen in the file (canonical-JSON sha256
-`f0b08df4fe80385da1d3e9a05e3779708c4e808b2da581aa974fea9505d64ae3`); synthetic
+`e22aaed68e558fdffe239e765a1fa28baaccfb4adeaba75ec4fb69c6dd47699a`); synthetic
 series are frozen outputs, not regenerated, so every campaign and every
 reference run sees byte-identical data.
 
 ## Workload shape and stage sizes
 
-Fixed envelope (per CONTRACT.md): batch 1–4, context ≤512, horizon ≤64,
-univariate, the model's 21 native quantiles. Windows carve disjoint
-`[context | future]` slices; futures are ground truth for the full-stage task
-metric and stay in the private oracle directory.
+The envelope is TtChronos's public API (CONTRACT.md):
+- batch 1–1,024 per call, on one card or on the 1×4 mesh;
+- context 1–2048;
+- horizon 1–64 (four 16-step patches);
+- unique or grouped rows, with optional known future covariates;
+- the model's 21 native quantiles.
 
-| Stage | Cases | Contents | Wall-time intent |
-|---|---|---|---|
-| `smoke` | 1 | ETTh1 OT, context 512 → horizon 64 | seconds; the innermost bring-up loop |
-| `bringup` | 8 | batch(2)/single/reorder consistency, masked tail (16 missing), boundary contexts 64/65, constant series | a minute or two; the correctness gate before any optimization |
-| `full` | 35 | 9 series × 3 windows (ctx 512/128/512, horizon 64/16/64) + batch4 + masked-holes + constant + behavior/revisit cases; 30 carry held-out futures | minutes on GPU or TT; run once, on frozen source, via `submit` |
+Windows carve `[context | future]` slices. Futures are ground truth for the full-stage task metric
+and stay in the private oracle directory. Grouped cases use aligned ETTh1 columns, so the variates
+of a group share timestamps. The oracle is the official `Chronos2Model.forward` in FP32, given
+the same context (NaN where masked), `group_ids` and `future_covariates` as `TtChronos.forward`.
+It is chunked on group boundaries.
+
+| Stage | Cases | Contents |
+|---|---|---|
+| `smoke` | 1 | ETTh1 OT, context 512 → horizon 64 |
+| `bringup` | 15 | the original cases without the masked tail (batch/single/reorder, contexts 64/65, constant), contexts 17/100/160/256 at 40 rows with horizons 16–64, context 2048, two groups of four plus a group-isolation check, a target with two known-future covariates |
+| `perf` | 24 | bringup + context 512 at b1/2/4/16/64/256/1,024 + paper shape (context 2048) at b1,024, unique and groups of four |
+| `mesh` | 22 | bringup + b4/6/64/256/1,024 + the paper-shape cases at b1,024 (capped at 1,024: TT's encoder misses the gate at 4,096) |
+| `full` | 42 | 9 series × 3 windows (ctx 512/128/64) + 7 long series at context 2048 + batch4, constant, behavior/revisit cases + a 7-variate group + a covariate case |
 
 Timing: 1 warmup + 1 measured repeat per case in short stages, 3 measured
 repeats in full; protocol `cpu_arrays_to_cpu_arrays_with_sync_excluding_load_
 preprocessing_progress_v1`.
 
 ## Gates
+
+Interior missing values and context 1 are not gated. `TtChronos` accepts all-valid contexts
+only, and TT's encoder misses the NRMSE gate at context 1 (0.09–0.13, measured 2026-11-02), so
+neither side can pass them. Context 160 at 1,024 or more rows is not gated either: TT's encoder's
+worst row reaches 0.050–0.084 there. Left padding of short contexts (17, 64, 65, 100) is covered.
 
 - `quantile_max_row_nrmse ≤ 0.04` vs the FP32 oracle (per batch row, over the
   full [horizon × 21-quantile] block) — every numerical case.
