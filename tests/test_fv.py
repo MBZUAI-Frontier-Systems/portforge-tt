@@ -57,7 +57,7 @@ TOY = """
 
 DRIVER = r"""
 #include "fv_runtime.h"
-const fv_data FV_DATA[] = {{0, 0, 0}};
+const fv_data FV_DATA[FV_MAX_DATA] = {{0, 0, 0}};
 const int FV_NDATA = 0;
 %(lifted)s
 static int16_t in[100];

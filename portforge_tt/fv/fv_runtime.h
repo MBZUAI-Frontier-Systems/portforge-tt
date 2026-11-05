@@ -58,8 +58,15 @@ static inline uint8_t *fv_alloc(uint64_t n)
     return p;
 }
 
-/* lifted code defines these (data symbols its auipc pairs address) */
-extern const fv_data FV_DATA[];
+/* lifted code defines these (data symbols its auipc pairs address). The array
+ * has a fixed size so the declaration and lifted.c's definition have one type:
+ * with an incomplete declaration, fv_load (compiled against it) reading
+ * FV_DATA at a symbolic address fails CBMC 6.6's flattening invariant
+ * (boolbv_map literal width) on every gather into a table. */
+#ifndef FV_MAX_DATA
+#define FV_MAX_DATA 16
+#endif
+extern const fv_data FV_DATA[FV_MAX_DATA];
 extern const int FV_NDATA;
 
 #ifndef FV_CBMC
@@ -84,6 +91,12 @@ static inline void fv_region_add(const char *name, uint64_t base, uint64_t size,
 {
     FV_ASSERT(fv_nregions < FV_MAX_REGIONS, "too many regions");
     fv_regions[fv_nregions++] = (fv_region){name, base, size, mem, writable};
+}
+
+/* store n little-endian bytes of v (harness-side setup of the candidate's buffers) */
+static inline void fv_put(uint8_t *mem, uint64_t v, unsigned n)
+{
+    for (unsigned b = 0; b < n; b++) mem[b] = (uint8_t)(v >> (8 * b));
 }
 
 /* fill a buffer with inputs: symbolic under CBMC, random natively */
@@ -111,6 +124,9 @@ uint64_t fv_load(uint64_t a, unsigned n)
             return v;
         }
     }
+#ifndef FV_CBMC
+    fprintf(stderr, "FV-DEBUG: load 0x%llx n=%u outside regions\n", (unsigned long long)a, n);
+#endif
     FV_ASSERT(0, "memory: load outside every buffer the kernel may read");
     return 0;
 }
@@ -127,6 +143,9 @@ void fv_store(uint64_t a, unsigned n, uint64_t value)
             return;
         }
     }
+#ifndef FV_CBMC
+    fprintf(stderr, "FV-DEBUG: store 0x%llx n=%u outside regions\n", (unsigned long long)a, n);
+#endif
     FV_ASSERT(0, "memory: store outside every buffer the kernel may write");
 }
 

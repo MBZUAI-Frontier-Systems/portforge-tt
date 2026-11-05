@@ -179,8 +179,93 @@ static ALWAYS_INLINE void loop_filter_dsp_init_riscv(Dav1dLoopFilterDSPContext *
     _meson_add(tree, "riscv/64/mc.S", "riscv/64/loopfilter.S")
 
 
+def _wire_sgr5x5(tree):
+    (tree / "src" / "riscv" / "looprestoration.h").write_text(LICENSE + """
+#include "src/cpu.h"
+#include "src/looprestoration.h"
+
+void BF(dav1d_sgr_filter_5x5, rvv)(pixel *p, const ptrdiff_t stride,
+                                   const pixel (*left)[4], const pixel *lpf,
+                                   const int w, int h,
+                                   const LooprestorationParams *const params,
+                                   const enum LrEdgeFlags edges HIGHBD_DECL_SUFFIX);
+
+static ALWAYS_INLINE void loop_restoration_dsp_init_riscv(Dav1dLoopRestorationDSPContext *const c,
+                                                          const int bpc)
+{
+    const unsigned flags = dav1d_get_cpu_flags();
+    if (!(flags & DAV1D_RISCV_CPU_FLAG_V)) return;
+    (void)bpc;
+#if BITDEPTH == 8
+    c->sgr[0] = BF(dav1d_sgr_filter_5x5, rvv);
+#endif
+}
+""")
+    src = tree / "src" / "looprestoration_tmpl.c"
+    _patch(src, '#elif ARCH_X86\n#include "src/x86/looprestoration.h"\n#endif',
+           '#elif ARCH_X86\n#include "src/x86/looprestoration.h"\n#elif ARCH_RISCV\n#include "src/riscv/looprestoration.h"\n#endif')
+    _patch(src, "#elif ARCH_X86\n    loop_restoration_dsp_init_x86(c, bpc);\n#endif",
+           "#elif ARCH_X86\n    loop_restoration_dsp_init_x86(c, bpc);\n#elif ARCH_RISCV\n"
+           "    loop_restoration_dsp_init_riscv(c, bpc);\n#endif")
+    _meson_add(tree, "riscv/64/mc.S", "riscv/64/looprestoration.S")
+
+
+def _wire_sgrmix(tree):
+    (tree / "src" / "riscv" / "looprestoration.h").write_text(LICENSE + """
+#include "src/cpu.h"
+#include "src/looprestoration.h"
+
+void BF(dav1d_sgr_filter_mix, rvv)(pixel *p, const ptrdiff_t stride,
+                                   const pixel (*left)[4], const pixel *lpf,
+                                   const int w, int h,
+                                   const LooprestorationParams *const params,
+                                   const enum LrEdgeFlags edges HIGHBD_DECL_SUFFIX);
+
+static ALWAYS_INLINE void loop_restoration_dsp_init_riscv(Dav1dLoopRestorationDSPContext *const c,
+                                                          const int bpc)
+{
+    const unsigned flags = dav1d_get_cpu_flags();
+    if (!(flags & DAV1D_RISCV_CPU_FLAG_V)) return;
+    (void)bpc;
+#if BITDEPTH == 8
+    c->sgr[2] = BF(dav1d_sgr_filter_mix, rvv);
+#endif
+}
+""")
+    src = tree / "src" / "looprestoration_tmpl.c"
+    _patch(src, '#elif ARCH_X86\n#include "src/x86/looprestoration.h"\n#endif',
+           '#elif ARCH_X86\n#include "src/x86/looprestoration.h"\n#elif ARCH_RISCV\n#include "src/riscv/looprestoration.h"\n#endif')
+    _patch(src, "#elif ARCH_X86\n    loop_restoration_dsp_init_x86(c, bpc);\n#endif",
+           "#elif ARCH_X86\n    loop_restoration_dsp_init_x86(c, bpc);\n#elif ARCH_RISCV\n"
+           "    loop_restoration_dsp_init_riscv(c, bpc);\n#endif")
+    _meson_add(tree, "riscv/64/mc.S", "riscv/64/looprestoration.S")
+
+
+def _wire_refmvs_tmvs(tree):
+    (tree / "src" / "riscv" / "refmvs.h").write_text(LICENSE + """
+#include "src/cpu.h"
+#include "src/refmvs.h"
+
+decl_load_tmvs_fn(dav1d_load_tmvs_rvv);
+
+static ALWAYS_INLINE void refmvs_dsp_init_riscv(Dav1dRefmvsDSPContext *const c) {
+    const unsigned flags = dav1d_get_cpu_flags();
+    if (!(flags & DAV1D_RISCV_CPU_FLAG_V)) return;
+
+    c->load_tmvs = dav1d_load_tmvs_rvv;
+}
+""")
+    src = tree / "src" / "refmvs.c"
+    _patch(src, '#elif ARCH_X86\n#include "src/x86/refmvs.h"\n#endif',
+           '#elif ARCH_X86\n#include "src/x86/refmvs.h"\n#elif ARCH_RISCV\n#include "src/riscv/refmvs.h"\n#endif')
+    _patch(src, "#elif ARCH_X86\n    refmvs_dsp_init_x86(c);\n#endif",
+           "#elif ARCH_X86\n    refmvs_dsp_init_x86(c);\n#elif ARCH_RISCV\n    refmvs_dsp_init_riscv(c);\n#endif")
+    _meson_add(tree, "riscv/64/pal.S", "riscv/64/refmvs.S")
+
+
 WIRING = {"refmvs": _wire_refmvs, "looprestoration": _wire_looprestoration, "sgr3x3": _wire_sgr3x3,
-          "loopfilter_uv": _wire_loopfilter_uv}
+          "loopfilter_uv": _wire_loopfilter_uv, "sgr5x5": _wire_sgr5x5, "sgrmix": _wire_sgrmix,
+          "refmvs_tmvs": _wire_refmvs_tmvs}
 
 
 # ----------------------------------------------------------------------------- slots and builds

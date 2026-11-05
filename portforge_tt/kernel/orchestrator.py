@@ -476,10 +476,11 @@ class Campaign:
             sessions_before = len(self.tree.nodes[n]["perf"])
             self.evaluate([n])                                  # rebuilds the tree with n, second session
             tag = f"camp-{self.run_dir.name}"[:40]
+            # held-out suites plus a full fv budget exceed the default RPC timeout
             r = self.gates.call("certify", {"pack": self.pack, "family": self.family, "tag": tag,
                                             "kernel": self.ukernel(n), "heldout_seed": self.manifest["heldout_seed"],
                                             "source": f"{self.gates.run_rel}/nodes/{n}/{self.src}",
-                                            "out": f"{self.gates.run_rel}/certify/{n[:10]}"})
+                                            "out": f"{self.gates.run_rel}/certify/{n[:10]}"}, timeout=5 * 3600)
             held = (r.get("heldout") or {}).get("passed", False)
             smt = r.get("smt")
             perf = self.tree.nodes[n]["perf"]

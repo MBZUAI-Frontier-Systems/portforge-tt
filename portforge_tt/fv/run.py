@@ -29,6 +29,7 @@ from . import lift as lift_mod
 
 FV_DIR = Path(__file__).resolve().parent
 OBJDUMP = "riscv64-linux-gnu-objdump"
+READELF = "riscv64-linux-gnu-readelf"
 
 
 @dataclass
@@ -93,6 +94,33 @@ def disassemble(cfg, binary):
     return "\n".join(lines) + "\n"
 
 
+def _relocations(cfg, binary):
+    """Dynamic relocations: [(offset, target)] for GOT slots the dynamic linker
+    would fill. The file content of such a slot is 0 (or the addend for
+    RELATIVE); the lifted code reads it at runtime, so the harvest must store
+    the *relocated* value. RELATIVE resolves to its addend; symbol types to
+    the symbol's value in this binary plus the addend."""
+    out = host.run(cfg, f"{READELF} -r {host.in_container(cfg, binary)}", timeout=300).stdout
+    relocs = []
+    for line in out.splitlines():
+        m = re.match(r"^([0-9a-f]{8,16})\s+([0-9a-f]+)\s+(\S+)\s*(.*)$", line.strip())
+        if not m or m.group(3).startswith("R_") is False:
+            continue
+        offset, rtype, rest = int(m.group(1), 16), m.group(3), m.group(4)
+        if rtype == "R_RISCV_RELATIVE":
+            addend = rest.strip().split()[-1] if rest.strip() else "0"
+            relocs.append((offset, int(addend, 16)))
+        elif rtype in ("R_RISCV_64", "R_RISCV_GLOB_DAT", "R_RISCV_JUMP_SLOT"):
+            parts = rest.split("+")
+            if len(parts) == 2:
+                sym_value = parts[0].strip().split()[0]
+                if re.fullmatch(r"[0-9a-f]+", sym_value):
+                    relocs.append((offset, (int(sym_value, 16) + int(parts[1], 16)) & (2 ** 64 - 1)))
+        # anything else (IRELATIVE, TLS, ...): left as-is; a kernel that needs
+        # it fails closed in the model (load outside the harvested regions)
+    return relocs
+
+
 def _symbols(cfg, binary):
     """[(addr, size, section, name)] of every symbol with a size."""
     out = host.run(cfg, f"{OBJDUMP} -t {host.in_container(cfg, binary)}", timeout=300).stdout
@@ -152,7 +180,9 @@ def lift_binary(cfg, binary, entry, work):
     code = {(f.start, f.end) for f in funcs.values() if f.insns}
     data = []
     syms = _symbols(cfg, binary)
-    for a in sorted(addrs):
+    queue = sorted(addrs)
+    data = []
+    for a in queue:
         if any(s <= a < e for s, e in code):
             continue   # an address inside code (a jump target), not data
         hit = [s for s in syms if s[0] <= a < s[0] + s[1] and s[2] != ".text"]
@@ -164,11 +194,30 @@ def lift_binary(cfg, binary, entry, work):
         if any(d[1] == base for d in data):
             continue
         data.append((name, base, _bytes(cfg, binary, base, base + size)))
+    # GOT slots (and any relocated words) hold their dynamic-relocation value,
+    # not the file bytes; patch them in and harvest the targets they point at
+    # (e.g. a PIC kernel reaching an extern table through the GOT).
+    relocs = _relocations(cfg, binary)
+    for k, (name, base, blob) in enumerate(data):
+        blob = bytearray(blob)
+        for offset, target in relocs:
+            if base <= offset < base + len(blob) and offset + 8 <= base + len(blob):
+                blob[offset - base: offset - base + 8] = target.to_bytes(8, "little")
+                if any(s <= target < e for s, e in code):
+                    continue
+                if not any(d[1] <= target < d[1] + len(d[2]) for d in data):
+                    hit = [s for s in syms if s[0] <= target < s[0] + s[1] and s[2] != ".text"]
+                    if hit:
+                        tbase, tsize, _, tname = hit[0]
+                        data.append((tname, tbase, _bytes(cfg, binary, tbase, tbase + tsize)))
+        data[k] = (name, base, bytes(blob))
     lines = ["/* lifted by portforge_tt.fv.lift from " + Path(binary).name + " entry " + entry + " */"]
     for k, (name, base, blob) in enumerate(data):
         lines.append(f"/* {name} */ static const uint8_t fv_data_{k}[{max(len(blob), 1)}] = {{"
                      + ", ".join(str(b) for b in blob) + "};")
-    lines.append("const fv_data FV_DATA[] = {" + "".join(
+    if len(data) > 16:
+        raise lift_mod.Unsupported(f"{len(data)} data symbols (FV_MAX_DATA is 16)")
+    lines.append("const fv_data FV_DATA[FV_MAX_DATA] = {" + "".join(
         f"{{{base:#x}ULL, {len(blob)}, fv_data_{k}}}, " for k, (_, base, blob) in enumerate(data))
                  + ("{0, 0, 0}" if not data else "") + "};")
     lines.append(f"const int FV_NDATA = {len(data)};")
@@ -235,23 +284,33 @@ def cosim(cfg, harness, work, includes, defines, runs=100, seed=1, sources=()):
     return {"passed": "ALL_OK" in text, "runs": runs, "failure": "" if "ALL_OK" in text else text[-2000:]}
 
 
-def prove(cfg, harness, work, includes, defines, vlen=512, timeout=1800, solver=None, extra=""):
-    """goto-cc + cbmc on the harness at one VLEN and one bounded configuration."""
+def prove(cfg, harness, work, includes, defines, vlen=512, timeout=1800, solver=None, extra="",
+          field_sensitivity=True, sources=()):
+    """goto-cc + cbmc on the harness at one VLEN and one bounded configuration.
+
+    sources are compiled with the harness, as in cosim: without them an extern
+    table the reference reads (dav1d_sgr_x_by_x) has no value in the goto
+    program and CBMC makes it an unconstrained input."""
     work = Path(work)
     tag = "-".join(f"{k}{v}" for k, v in sorted(defines.items())) + f"-vlen{vlen}"
     tag = re.sub(r"[^\w.-]", "_", tag)[:120]
     inc, dfn = _flags([host.in_container(cfg, p) for p in includes], {**defines, "FV_VLEN": vlen})
     w = host.in_container(cfg, work)
-    src = host.in_container(cfg, harness)
+    src = " ".join([host.in_container(cfg, harness)] + [host.in_container(cfg, s) for s in sources])
     gb = f"{tag}.goto"
     log = work / f"{tag}.cbmc.log"
     solver_flag = f"--{solver}" if solver else ""
+    # constant-index accesses to the register file, stack and buffers become plain
+    # variables instead of array terms: W=1 wiener 5+ min -> 23 s. Per-family:
+    # on some programs (loopfilter) expanding the arena into fields is what
+    # makes every symex step crawl instead.
+    # the limit must cover the arena, or the arena silently stays an array term
+    fs_size = max(70000, int(defines.get("FV_ARENA_SIZE", 32768)) + 1)
+    fs_flag = f"--max-field-sensitivity-array-size {fs_size}" if field_sensitivity else ""
     script = (f"cd {w} && goto-cc -std=gnu11 -I{host.in_container(cfg, FV_DIR)} -I. {inc} {dfn} -DFV_CBMC=1 -DFV_CHECK_ALIGN "
               f"{src} -o {gb} > {tag}.gotocc.log 2>&1 || {{ echo GOTOCC_FAILED; tail -40 {tag}.gotocc.log; exit 0; }}; "
               f"timeout {timeout} cbmc {gb} --unwinding-assertions --object-bits 16 "
-              # constant-index accesses to the register file, stack and buffers become plain
-              # variables instead of array terms: W=1 wiener 5+ min -> 23 s
-              f"--max-field-sensitivity-array-size 70000 {solver_flag} {extra} "
+              f"{fs_flag} {solver_flag} {extra} "
               f"--trace --json-ui > {tag}.cbmc.json 2> {tag}.cbmc.err; echo EXIT=$?")
     t0 = time.time()
     proc = host.run(cfg, script, timeout=timeout + 600, check=False)
@@ -266,7 +325,8 @@ def prove(cfg, harness, work, includes, defines, vlen=512, timeout=1800, solver=
     if not solver and err.exists() and "invariant violation" in err.read_text(errors="replace"):
         # CBMC 6.6's SAT flattening hits an internal invariant (boolbv_map literal width)
         # on some lifted programs; the SMT backend does not go through it
-        v = prove(cfg, harness, work, includes, defines, vlen=vlen, timeout=timeout, solver="z3", extra=extra)
+        v = prove(cfg, harness, work, includes, defines, vlen=vlen, timeout=timeout, solver="z3", extra=extra,
+                  field_sensitivity=field_sensitivity, sources=sources)
         v.error = (v.error + " " if v.error else "") + "[z3 backend: CBMC SAT backend hit an internal invariant]"
         return v
     try:
@@ -283,8 +343,10 @@ def _verdict(result, defines, vlen, seconds, log):
         if "result" in item:
             props = item["result"]
     failed = [p for p in props if p.get("status") == "FAILURE"]
-    hard = [p for p in failed if not p.get("description", "").startswith("alignment:")]
     align = [p for p in failed if p.get("description", "").startswith("alignment:")]
+    # an unwinding assertion means the bound was too small, not that the kernel is wrong
+    unwind = [p for p in failed if ".unwind." in p.get("property", "")]
+    hard = [p for p in failed if p not in align and p not in unwind]
     trace = {}
     if hard and hard[0].get("trace"):
         trace = _inputs(hard[0]["trace"])
@@ -292,7 +354,8 @@ def _verdict(result, defines, vlen, seconds, log):
               if item.get("messageType") == "ERROR"]
     if errors and not props:
         return Verdict("error", defines, vlen, seconds, error="; ".join(errors)[-2000:], log=log)
-    verdict = "counterexample" if hard else "alignment" if align else "proved" if props else "error"
+    verdict = ("counterexample" if hard else "unwind" if unwind else "alignment" if align
+               else "proved" if props else "error")
     return Verdict(verdict, defines, vlen, seconds,
                    failed=[{"property": p["property"], "description": p.get("description")} for p in hard][:20],
                    alignment=[{"property": p["property"], "description": p.get("description")} for p in align][:20],

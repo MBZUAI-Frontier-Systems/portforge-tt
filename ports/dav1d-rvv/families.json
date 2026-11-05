@@ -238,7 +238,13 @@
      "name": "riscv_example_pal.S",
      "path": "src/riscv/64/pal.S"
     }
-   ]
+   ],
+   "fv": {
+    "harness": "dav1d_sgr3x3.c",
+    "entries": {
+     "": "dav1d_sgr_filter_3x3_8bpc_rvv"
+    }
+   }
   },
   "loopfilter-uv-8bpc": {
    "project": "dav1d",
@@ -288,7 +294,301 @@
      "name": "riscv_example_pal.S",
      "path": "src/riscv/64/pal.S"
     }
-   ]
+   ],
+   "fv": {
+    "harness": "dav1d_lpf_uv.c",
+    "entries": {
+     "h": "dav1d_lpf_h_sb_uv_8bpc_rvv",
+     "v": "dav1d_lpf_v_sb_uv_8bpc_rvv"
+    }
+   }
+  },
+  "looprestoration-sgr5x5-8bpc": {
+   "project": "dav1d",
+   "signature": "dav1d",
+   "source_name": "kernel.S",
+   "neon_ukernel": "dav1d_sgr5x5",
+   "wiring": "sgr5x5",
+   "asm_path": "src/riscv/64/looprestoration.S",
+   "test": "looprestoration_8bpc",
+   "functions": "sgr_5x5*",
+   "symbols": [
+    "dav1d_sgr_filter_5x5_8bpc_rvv"
+   ],
+   "allowed_externs": [
+    "dav1d_sgr_x_by_x"
+   ],
+   "baseline": "C reference (no upstream RVV at the pinned revision)",
+   "bench_duration_us": 4000,
+   "context": [
+    {
+     "name": "reference_looprestoration_tmpl.c",
+     "path": "src/looprestoration_tmpl.c",
+     "lines": [
+      1,
+      43
+     ]
+    },
+    {
+     "name": "reference_sgr.c",
+     "path": "src/looprestoration_tmpl.c",
+     "lines": [
+      389,
+      1020
+     ]
+    },
+    {
+     "name": "looprestoration.h",
+     "path": "src/looprestoration.h"
+    },
+    {
+     "name": "tables_sgr.c",
+     "path": "src/tables.c",
+     "lines": [
+      410,
+      460
+     ]
+    },
+    {
+     "name": "checkasm_looprestoration.c",
+     "path": "tests/checkasm/looprestoration.c"
+    },
+    {
+     "name": "arm64_sgr_driver.h",
+     "path": "src/arm/looprestoration.h",
+     "lines": [
+      250,
+      560
+     ]
+    },
+    {
+     "name": "arm64_looprestoration_sgr.S",
+     "path": "src/arm/64/looprestoration.S",
+     "lines": [
+      966,
+      1303
+     ]
+    },
+    {
+     "name": "arm64_looprestoration_common.S",
+     "path": "src/arm/64/looprestoration_common.S"
+    },
+    {
+     "name": "arm64_looprestoration_tmpl.S",
+     "path": "src/arm/64/looprestoration_tmpl.S"
+    },
+    {
+     "name": "x86_sgr_5x5_avx2.asm",
+     "path": "src/x86/looprestoration_avx2.asm",
+     "lines": [
+      701,
+      1171
+     ]
+    },
+    {
+     "name": "x86_looprestoration_avx2_rodata.asm",
+     "path": "src/x86/looprestoration_avx2.asm",
+     "lines": [
+      1,
+      62
+     ]
+    },
+    {
+     "name": "riscv_asm.S",
+     "path": "src/riscv/asm.S"
+    },
+    {
+     "name": "riscv_example_pal.S",
+     "path": "src/riscv/64/pal.S"
+    }
+   ],
+   "fv": {
+    "harness": "dav1d_sgr5x5.c",
+    "entries": {
+     "": "dav1d_sgr_filter_5x5_8bpc_rvv"
+    }
+   }
+  },
+  "looprestoration-sgrmix-8bpc": {
+   "project": "dav1d",
+   "signature": "dav1d",
+   "source_name": "kernel.S",
+   "neon_ukernel": "dav1d_sgrmix",
+   "wiring": "sgrmix",
+   "asm_path": "src/riscv/64/looprestoration.S",
+   "test": "looprestoration_8bpc",
+   "functions": "sgr_mix*",
+   "symbols": [
+    "dav1d_sgr_filter_mix_8bpc_rvv"
+   ],
+   "allowed_externs": [
+    "dav1d_sgr_x_by_x"
+   ],
+   "baseline": "C reference (no upstream RVV at the pinned revision)",
+   "bench_duration_us": 4000,
+   "context": [
+    {
+     "name": "reference_looprestoration_tmpl.c",
+     "path": "src/looprestoration_tmpl.c",
+     "lines": [
+      1,
+      43
+     ]
+    },
+    {
+     "name": "reference_sgr.c",
+     "path": "src/looprestoration_tmpl.c",
+     "lines": [
+      389,
+      1270
+     ]
+    },
+    {
+     "name": "looprestoration.h",
+     "path": "src/looprestoration.h"
+    },
+    {
+     "name": "tables_sgr.c",
+     "path": "src/tables.c",
+     "lines": [
+      410,
+      460
+     ]
+    },
+    {
+     "name": "checkasm_looprestoration.c",
+     "path": "tests/checkasm/looprestoration.c"
+    },
+    {
+     "name": "arm64_sgr_driver.h",
+     "path": "src/arm/looprestoration.h",
+     "lines": [
+      250,
+      560
+     ]
+    },
+    {
+     "name": "arm64_looprestoration_sgr.S",
+     "path": "src/arm/64/looprestoration.S",
+     "lines": [
+      966,
+      1303
+     ]
+    },
+    {
+     "name": "arm64_looprestoration_common.S",
+     "path": "src/arm/64/looprestoration_common.S"
+    },
+    {
+     "name": "arm64_looprestoration_tmpl.S",
+     "path": "src/arm/64/looprestoration_tmpl.S"
+    },
+    {
+     "name": "x86_sgr_mix_avx2.asm",
+     "path": "src/x86/looprestoration_avx2.asm",
+     "lines": [
+      1550,
+      2339
+     ]
+    },
+    {
+     "name": "x86_looprestoration_avx2_rodata.asm",
+     "path": "src/x86/looprestoration_avx2.asm",
+     "lines": [
+      1,
+      62
+     ]
+    },
+    {
+     "name": "riscv_asm.S",
+     "path": "src/riscv/asm.S"
+    },
+    {
+     "name": "riscv_example_pal.S",
+     "path": "src/riscv/64/pal.S"
+    }
+   ],
+   "fv": {
+    "harness": "dav1d_sgrmix.c",
+    "entries": {
+     "": "dav1d_sgr_filter_mix_8bpc_rvv"
+    }
+   }
+  },
+  "refmvs-load_tmvs": {
+   "project": "dav1d",
+   "signature": "dav1d",
+   "source_name": "kernel.S",
+   "neon_ukernel": "dav1d_load_tmvs",
+   "wiring": "refmvs_tmvs",
+   "asm_path": "src/riscv/64/refmvs.S",
+   "test": "refmvs",
+   "functions": "load_tmvs",
+   "symbols": [
+    "dav1d_load_tmvs_rvv"
+   ],
+   "baseline": "C reference (no upstream RVV at the pinned revision)",
+   "bench_duration_us": 2000,
+   "context": [
+    {
+     "name": "reference_refmvs.c",
+     "path": "src/refmvs.c",
+     "lines": [
+      719,
+      940
+     ]
+    },
+    {
+     "name": "refmvs.h",
+     "path": "src/refmvs.h"
+    },
+    {
+     "name": "checkasm_refmvs.c",
+     "path": "tests/checkasm/refmvs.c",
+     "lines": [
+      140,
+      230
+     ]
+    },
+    {
+     "name": "arm64_refmvs.S",
+     "path": "src/arm/64/refmvs.S",
+     "lines": [
+      1,
+      96
+     ]
+    },
+    {
+     "name": "x86_refmvs.asm",
+     "path": "src/x86/refmvs.asm",
+     "lines": [
+      1,
+      361
+     ]
+    },
+    {
+     "name": "x86_refmvs_avx2_avx512.asm",
+     "path": "src/x86/refmvs.asm",
+     "lines": [
+      700,
+      930
+     ]
+    },
+    {
+     "name": "riscv_asm.S",
+     "path": "src/riscv/asm.S"
+    },
+    {
+     "name": "riscv_example_pal.S",
+     "path": "src/riscv/64/pal.S"
+    }
+   ],
+   "fv": {
+    "harness": "dav1d_load_tmvs.c",
+    "entries": {
+     "": "dav1d_load_tmvs_rvv"
+    }
+   }
   }
  }
 }

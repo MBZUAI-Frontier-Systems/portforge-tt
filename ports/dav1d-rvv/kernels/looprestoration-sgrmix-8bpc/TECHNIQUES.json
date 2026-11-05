@@ -1,0 +1,90 @@
+{
+ "family": "looprestoration-sgrmix-8bpc",
+ "spec": {
+  "functions": "dav1d_sgr_filter_mix_8bpc_rvv (c->sgr[2]) with the signature of decl_lr_filter_fn at BITDEPTH 8: (pixel *dst, ptrdiff_t stride, const pixel (*left)[4], const pixel *lpf, int w, int h, const LooprestorationParams *params, enum LrEdgeFlags edges)",
+  "formula": "sgr_mix_c in context/reference_sgr.c at 8bpc: BOTH the 3x3 and the 5x5 box sums of the same source rows (sgr_box35_row_h computes both in one pass), two weight computations (3x3: n=9, one_by_x=455; 5x5: n=25, one_by_x=164, each with the C's u32 wrap), the 5x5 two-row finish (5/6 weights) and the 3x3 finish (3/4 weights), then the blend v = w0*tmp5 + w1*tmp3 with dst[i] = iclip(dst[i] + ((v + (1<<10)) >> 11)), exactly as the C",
+  "domain": "1 <= w <= 384 (w == 256 when LR_HAVE_RIGHT), 1 <= h <= 64; params->sgr.s0 = 140, s1 = 3236 (dav1d_sgr_params[0]); w0 in [-96, 31], w1 = 128 - w0 - sw1 with sw1 in [-32, 95]; pixels 0..255",
+  "width_bounds": [
+   "the two weight tracks use different n and one_by_x; both p*s products wrap at 32 bits, exactly as the C",
+   "writes past w in a dst row are allowed up to w rounded up to 64 pixels (checkasm padded-align); nothing else may change",
+   "the only symbol outside your file you may use is the table dav1d_sgr_x_by_x (256 bytes, read-only); every VLEN 128..1024; RVV 1.0 + Zba/Zbb"
+  ],
+  "regimes": {
+   "bench": "checkasm --bench: w=256, h=64, all edges, one cell: sgr_mix_8bpc",
+   "check": "checkasm: random w, h, all 16 edge combinations, random w0, w1"
+  }
+ },
+ "candidates": [
+  {
+   "id": "vla-stripmine",
+   "application": "one vsetvl-driven strip loop per row pass; the tail is a smaller vl",
+   "expected_gain": "no scalar epilogue",
+   "preconditions": [],
+   "sources": [
+    "catalogue"
+   ]
+  },
+  {
+   "id": "k:shared-box",
+   "title": "Compute the 3x3 and 5x5 box sums from shared shifted loads",
+   "application": "sgr_box35_row_h loads each source position once (or slides) and forms both the 3-wide and 5-wide sums: the center 3-taps of the 5-tap sum are the 3x3 sum",
+   "expected_gain": "halves the horizontal pass memory traffic vs two separate box functions",
+   "preconditions": [],
+   "sources": [
+    "C reference sgr_box35_row_h",
+    "arm64 sgr_box35_row_h_8bpc_neon"
+   ]
+  },
+  {
+   "id": "k:table-gather",
+   "title": "x_by_x lookup by an indexed load or an in-register gather",
+   "application": "z is at most 255 for both tracks: vluxei8 from dav1d_sgr_x_by_x, or the 256-byte table in an LMUL-4 group with vrgather.vv; both weight tracks share the same table",
+   "expected_gain": "one table load serves both weight tracks",
+   "preconditions": [
+    "indices clamped to 0..255 before the lookup"
+   ],
+   "sources": [
+    "arm64 tbl on the table",
+    "x86 vpgatherdd"
+   ]
+  },
+  {
+   "id": "k:u32-wrap-mul",
+   "title": "p*s with the C's 32-bit wrap, twice",
+   "application": "both z computations wrap at 32 bits: e32 vmul (modular) and logical vsrl; never widening multiplies",
+   "expected_gain": "correctness",
+   "preconditions": [],
+   "sources": [
+    "C reference sgr_calc_row_ab"
+   ]
+  },
+  {
+   "id": "k:dual-accumulator",
+   "title": "Keep the 5x5 and 3x3 A/B rows in disjoint register groups",
+   "application": "the two finish filters read different A/B windows of the same rows; holding both accumulators live avoids recomputing either weight track",
+   "expected_gain": "one weight pass feeds both finish filters",
+   "preconditions": [
+    "LMUL budget: mix is the register-hungriest sgr variant"
+   ],
+   "sources": [
+    "C reference sgr_finish_mix"
+   ]
+  },
+  {
+   "id": "max-lmul",
+   "application": "largest LMUL the register budget allows per pass; mix needs more groups than 3x3/5x5, so measure m4 vs m8 per pass",
+   "expected_gain": "fewer strip iterations where it fits",
+   "preconditions": [
+    "group bases stay aligned; widening source EMUL matches how data was written"
+   ],
+   "sources": [
+    "catalogue"
+   ]
+  }
+ ],
+ "mined_from": [
+  "dav1d d7a83f6e: src/looprestoration_tmpl.c sgr_mix_c and helpers, src/tables.c dav1d_sgr_x_by_x, src/arm/looprestoration.h + src/arm/64/looprestoration*.S (sgr), src/x86/looprestoration_avx2.asm sgr_filter_mix_8bpc, tests/checkasm/looprestoration.c",
+  "RVV catalogue",
+  "X280: VLEN 512, Zba/Zbb"
+ ]
+}

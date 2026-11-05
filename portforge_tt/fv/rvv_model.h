@@ -58,6 +58,15 @@ extern fv_state S;
 uint64_t fv_load(uint64_t addr, unsigned n);
 void fv_store(uint64_t addr, unsigned n, uint64_t value);
 
+/* Element counts in this model are data-dependent (S.vl, S.sew). A loop whose
+ * trip count is not syntactically concrete is unwound by CBMC without end
+ * (2026-11-03: fv_vmerge unwound 7136+ times at VLEN 128). Every such loop is
+ * capped by its structural maximum: elements <= FV_VLEN (e8, m8), bytes per
+ * element <= 8, registers per group <= 8. The cap makes the guard
+ * structurally false at the cap, so unwinding always terminates; semantics
+ * are unchanged (the capped value is never below any real trip count). */
+#define FV_ECAP FV_VLEN
+
 static inline uint64_t fv_mask(unsigned bits) { return bits >= 64 ? ~0ULL : ((1ULL << bits) - 1); }
 static inline uint64_t fv_sx(uint64_t v, unsigned bits)
 {
@@ -129,7 +138,7 @@ static inline uint64_t fv_vget(unsigned reg, uint64_t i, unsigned eew)
     uint64_t off = (uint64_t)reg * VLENB + i * (eew / 8);
     FV_ASSERT(off + eew / 8 <= 32 * VLENB, "vector element outside the register file");
     uint64_t v = 0;
-    for (unsigned b = 0; b < eew / 8; b++) v |= (uint64_t)S.v[off + b] << (8 * b);
+    for (unsigned b = 0; b < 8 && b < eew / 8; b++) v |= (uint64_t)S.v[off + b] << (8 * b);
     return v;
 }
 
@@ -137,7 +146,7 @@ static inline void fv_vset(unsigned reg, uint64_t i, unsigned eew, uint64_t valu
 {
     uint64_t off = (uint64_t)reg * VLENB + i * (eew / 8);
     FV_ASSERT(off + eew / 8 <= 32 * VLENB, "vector element outside the register file");
-    for (unsigned b = 0; b < eew / 8; b++) S.v[off + b] = (uint8_t)(value >> (8 * b));
+    for (unsigned b = 0; b < 8 && b < eew / 8; b++) S.v[off + b] = (uint8_t)(value >> (8 * b));
 }
 
 static inline int fv_mbit(unsigned reg, uint64_t i) { return (S.v[reg * VLENB + i / 8] >> (i % 8)) & 1; }
@@ -167,7 +176,7 @@ static inline void fv_tail(unsigned vd, uint64_t from, unsigned eew, unsigned em
     if (!agnostic) return;
     _Bool ones = FV_AGNOSTIC();
     uint64_t end = fv_tail_end(eew, emul8);
-    for (uint64_t i = from; i < end; i++) fv_vset(vd, i, eew, ones ? fv_mask(eew) : fv_vget(vd, i, eew));
+    for (uint64_t i = from; i < FV_ECAP && i < end; i++) fv_vset(vd, i, eew, ones ? fv_mask(eew) : fv_vget(vd, i, eew));
 }
 
 /* the value of a masked-off element: undisturbed, or all ones when vma */
@@ -323,7 +332,7 @@ static inline void fv_vop(int op, unsigned vd, unsigned vs2, int src, unsigned v
     if (src == FV_SRC_V) fv_group_check(vs1, S.lmul8, "vs1 group");
     if (masked) FV_ASSERT(vd != 0, "masked op writes v0");
     int agn = FV_AGNOSTIC();
-    for (uint64_t i = 0; i < S.vl; i++) {
+    for (uint64_t i = 0; i < FV_ECAP && i < S.vl; i++) {
         uint64_t a = fv_vget(vs2, i, sew);
         uint64_t b = src == FV_SRC_V ? fv_vget(vs1, i, sew) : scalar;
         unsigned sat = S.vxsat;
@@ -341,7 +350,7 @@ static inline void fv_vmerge(unsigned vd, unsigned vs2, int src, unsigned vs1, u
     fv_vcheck();
     unsigned sew = S.sew;
     fv_group_check(vd, S.lmul8, "vd group");
-    for (uint64_t i = 0; i < S.vl; i++) {
+    for (uint64_t i = 0; i < FV_ECAP && i < S.vl; i++) {
         int take = !merge || fv_mbit(0, i);
         uint64_t b = src == FV_SRC_V ? fv_vget(vs1, i, sew) : scalar & fv_mask(sew);
         fv_vset(vd, i, sew, take ? b : fv_vget(vs2, i, sew));
@@ -358,7 +367,7 @@ static inline void fv_vcmp(int op, unsigned vd, unsigned vs2, int src, unsigned 
     int agn = FV_AGNOSTIC();
     uint8_t res[VLENB];
     for (unsigned b = 0; b < VLENB; b++) res[b] = S.v[vd * VLENB + b];
-    for (uint64_t i = 0; i < S.vl; i++) {
+    for (uint64_t i = 0; i < FV_ECAP && i < S.vl; i++) {
         uint64_t a = fv_vget(vs2, i, sew);
         uint64_t b = src == FV_SRC_V ? fv_vget(vs1, i, sew) : scalar;
         int computed = (int)fv_alu(op, a, b, sew);
@@ -380,7 +389,7 @@ static inline void fv_vmuladd(int op, unsigned vd, int src, unsigned vs1, uint64
     uint64_t m = fv_mask(sew);
     fv_group_check(vd, S.lmul8, "vd group");
     int agn = FV_AGNOSTIC();
-    for (uint64_t i = 0; i < S.vl; i++) {
+    for (uint64_t i = 0; i < FV_ECAP && i < S.vl; i++) {
         if (masked && !fv_mbit(0, i)) { fv_inactive(vd, i, sew, agn); continue; }   /* rare: masked multiply-add */
         uint64_t a = src == FV_SRC_V ? fv_vget(vs1, i, sew) : scalar;
         uint64_t b = fv_vget(vs2, i, sew), d = fv_vget(vd, i, sew), r;
@@ -415,7 +424,7 @@ static inline void fv_vwop(int op, unsigned vd, unsigned vs2, int src, unsigned 
     fv_group_check(vs2, wide2 ? wl8 : S.lmul8, "widening vs2 group");
     uint64_t wm = fv_mask(wsew);
     int agn = FV_AGNOSTIC();
-    for (uint64_t i = 0; i < S.vl; i++) {
+    for (uint64_t i = 0; i < FV_ECAP && i < S.vl; i++) {
         if (masked && !fv_mbit(0, i)) { fv_inactive(vd, i, wsew, agn); continue; }
         uint64_t b = src == FV_SRC_V ? fv_vget(vs1, i, sew) : scalar & fv_mask(sew);
         uint64_t a = fv_vget(vs2, i, wide2 ? wsew : sew);
@@ -459,7 +468,7 @@ static inline void fv_vnop(int op, unsigned vd, unsigned vs2, int src, unsigned 
     int agn = FV_AGNOSTIC();
     /* in-order is safe when vd is the low part of vs2: narrow element i overlaps wide
      * element i / 2, which is read in the same or an earlier iteration */
-    for (uint64_t i = 0; i < S.vl; i++) {
+    for (uint64_t i = 0; i < FV_ECAP && i < S.vl; i++) {
         if (masked && !fv_mbit(0, i)) { fv_inactive(vd, i, sew, agn); continue; }
         uint64_t a = fv_vget(vs2, i, wsew);
         uint64_t b = src == FV_SRC_V ? fv_vget(vs1, i, sew) : scalar;
@@ -482,7 +491,7 @@ static inline void fv_vext(unsigned vd, unsigned vs2, unsigned frac, int sign, i
     FV_ASSERT(ssew >= 8, "extension source EEW below 8");
     fv_group_check(vd, S.lmul8, "vd group");
     int agn = FV_AGNOSTIC();
-    for (uint64_t i = 0; i < S.vl; i++) {
+    for (uint64_t i = 0; i < FV_ECAP && i < S.vl; i++) {
         if (masked && !fv_mbit(0, i)) { fv_inactive(vd, i, sew, agn); continue; }
         uint64_t a = fv_vget(vs2, i, ssew);
         fv_vset(vd, i, sew, (sign ? fv_sx(a, ssew) : a) & fv_mask(sew));
@@ -505,7 +514,7 @@ static inline void fv_vmv_s_x(unsigned vd, uint64_t value)
         fv_vset(vd, 0, S.sew, value & fv_mask(S.sew));
         if (S.vta) {
             _Bool ones = FV_AGNOSTIC();
-            for (uint64_t i = 1; i < (uint64_t)VLENB * 8 / S.sew; i++)
+            for (uint64_t i = 1; i < (uint64_t)VLENB && i < (uint64_t)VLENB * 8 / S.sew; i++)
                 fv_vset(vd, i, S.sew, ones ? fv_mask(S.sew) : fv_vget(vd, i, S.sew));
         }
     }
@@ -514,14 +523,14 @@ static inline void fv_vmv_s_x(unsigned vd, uint64_t value)
 static inline void fv_vmvnr(unsigned vd, unsigned vs2, unsigned n)
 {
     FV_ASSERT(vd % n == 0 && vs2 % n == 0 && vd + n <= 32 && vs2 + n <= 32, "vmv<n>r register alignment");
-    for (unsigned b = 0; b < n * VLENB; b++) S.v[vd * VLENB + b] = S.v[vs2 * VLENB + b];
+    for (unsigned b = 0; b < 8 * VLENB && b < n * VLENB; b++) S.v[vd * VLENB + b] = S.v[vs2 * VLENB + b];
 }
 
 static inline void fv_vid(unsigned vd, int masked)
 {
     fv_vcheck();
     int agn = FV_AGNOSTIC();
-    for (uint64_t i = 0; i < S.vl; i++) {
+    for (uint64_t i = 0; i < FV_ECAP && i < S.vl; i++) {
         if (masked && !fv_mbit(0, i)) { fv_inactive(vd, i, S.sew, agn); continue; }
         fv_vset(vd, i, S.sew, i & fv_mask(S.sew));
     }
@@ -537,7 +546,7 @@ static inline void fv_vrgather(unsigned vd, unsigned vs2, int src, unsigned vs1,
     uint64_t vlmax = fv_vlmax_of(sew, S.lmul8);
     FV_ASSERT(vd != vs2 && (src != FV_SRC_V || vd != vs1), "vrgather destination overlaps a source");
     int agn = FV_AGNOSTIC();
-    for (uint64_t i = 0; i < S.vl; i++) {
+    for (uint64_t i = 0; i < FV_ECAP && i < S.vl; i++) {
         if (masked && !fv_mbit(0, i)) { fv_inactive(vd, i, sew, agn); continue; }
         uint64_t idx = src == FV_SRC_V ? fv_vget(vs1, i, idx_eew) : scalar;
         fv_vset(vd, i, sew, idx < vlmax ? fv_vget(vs2, idx, sew) : 0);
@@ -551,7 +560,7 @@ static inline void fv_vslideup(unsigned vd, unsigned vs2, uint64_t off, int mask
     unsigned sew = S.sew;
     FV_ASSERT(vd != vs2, "vslideup destination overlaps the source");
     int agn = FV_AGNOSTIC();
-    for (uint64_t i = off; i < S.vl; i++) {
+    for (uint64_t i = off; i < FV_ECAP && i < S.vl; i++) {
         if (masked && !fv_mbit(0, i)) { fv_inactive(vd, i, sew, agn); continue; }
         fv_vset(vd, i, sew, fv_vget(vs2, i - off, sew));
     }
@@ -566,9 +575,9 @@ static inline void fv_vslidedown(unsigned vd, unsigned vs2, uint64_t off, int ma
     int agn = FV_AGNOSTIC();
     /* reads ahead of writes: copy first (vd may equal vs2 for slidedown) */
     uint64_t tmp[FV_VLEN];
-    for (uint64_t i = 0; i < S.vl; i++)
+    for (uint64_t i = 0; i < FV_ECAP && i < S.vl; i++)
         tmp[i] = (off < vlmax && i + off < vlmax) ? fv_vget(vs2, i + off, sew) : 0;
-    for (uint64_t i = 0; i < S.vl; i++) {
+    for (uint64_t i = 0; i < FV_ECAP && i < S.vl; i++) {
         if (masked && !fv_mbit(0, i)) { fv_inactive(vd, i, sew, agn); continue; }
         fv_vset(vd, i, sew, tmp[i]);
     }
@@ -581,7 +590,7 @@ static inline void fv_vslide1up(unsigned vd, unsigned vs2, uint64_t x, int maske
     unsigned sew = S.sew;
     FV_ASSERT(vd != vs2, "vslide1up destination overlaps the source");
     int agn = FV_AGNOSTIC();
-    for (uint64_t i = 0; i < S.vl; i++) {
+    for (uint64_t i = 0; i < FV_ECAP && i < S.vl; i++) {
         if (masked && !fv_mbit(0, i)) { fv_inactive(vd, i, sew, agn); continue; }
         fv_vset(vd, i, sew, i == 0 ? x & fv_mask(sew) : fv_vget(vs2, i - 1, sew));
     }
@@ -593,7 +602,7 @@ static inline void fv_vslide1down(unsigned vd, unsigned vs2, uint64_t x, int mas
     fv_vcheck();
     unsigned sew = S.sew;
     int agn = FV_AGNOSTIC();
-    for (uint64_t i = 0; i < S.vl; i++) {
+    for (uint64_t i = 0; i < FV_ECAP && i < S.vl; i++) {
         if (masked && !fv_mbit(0, i)) { fv_inactive(vd, i, sew, agn); continue; }
         fv_vset(vd, i, sew, i + 1 == S.vl ? x & fv_mask(sew) : fv_vget(vs2, i + 1, sew));
     }
@@ -606,7 +615,7 @@ static inline void fv_vcompress(unsigned vd, unsigned vs2, unsigned vs1)
     unsigned sew = S.sew;
     FV_ASSERT(vd != vs2 && vd != vs1, "vcompress overlap");
     uint64_t k = 0;
-    for (uint64_t i = 0; i < S.vl; i++)
+    for (uint64_t i = 0; i < FV_ECAP && i < S.vl; i++)
         if (fv_mbit(vs1, i)) fv_vset(vd, k++, sew, fv_vget(vs2, i, sew));
     fv_tail(vd, k, sew, S.lmul8, 1);
 }
@@ -620,7 +629,7 @@ static inline void fv_vred(int op, unsigned vd, unsigned vs2, unsigned vs1, int 
     unsigned sew = S.sew, dsew = (op == R_WSUM || op == R_WSUMU) ? 2 * sew : sew;
     if (S.vl == 0) return;
     uint64_t acc = fv_vget(vs1, 0, dsew), m = fv_mask(dsew);
-    for (uint64_t i = 0; i < S.vl; i++) {
+    for (uint64_t i = 0; i < FV_ECAP && i < S.vl; i++) {
         uint64_t before = acc;
         uint64_t a = fv_vget(vs2, i, sew);
         switch (op) {
@@ -640,7 +649,7 @@ static inline void fv_vred(int op, unsigned vd, unsigned vs2, unsigned vs1, int 
     fv_vset(vd, 0, dsew, acc);
     if (S.vta) {
         _Bool ones = FV_AGNOSTIC();
-        for (uint64_t i = 1; i < (uint64_t)VLENB * 8 / dsew; i++)
+        for (uint64_t i = 1; i < (uint64_t)VLENB && i < (uint64_t)VLENB * 8 / dsew; i++)
             fv_vset(vd, i, dsew, ones ? fv_mask(dsew) : fv_vget(vd, i, dsew));
     }
 }
@@ -653,7 +662,7 @@ static inline void fv_vmlogic(int op, unsigned vd, unsigned vs2, unsigned vs1)
     fv_vcheck();
     uint8_t res[VLENB];
     for (unsigned b = 0; b < VLENB; b++) res[b] = S.v[vd * VLENB + b];
-    for (uint64_t i = 0; i < S.vl; i++) {
+    for (uint64_t i = 0; i < FV_ECAP && i < S.vl; i++) {
         int a = fv_mbit(vs2, i), b = fv_mbit(vs1, i), r;
         switch (op) {
         case M_AND: r = a & b; break;
@@ -677,7 +686,7 @@ static inline uint64_t fv_vcpop(unsigned vs2, int masked)
 {
     fv_vcheck();
     uint64_t n = 0;
-    for (uint64_t i = 0; i < S.vl; i++)
+    for (uint64_t i = 0; i < FV_ECAP && i < S.vl; i++)
         if ((!masked || fv_mbit(0, i)) && fv_mbit(vs2, i)) n++;
     return n;
 }
@@ -685,7 +694,7 @@ static inline uint64_t fv_vcpop(unsigned vs2, int masked)
 static inline uint64_t fv_vfirst(unsigned vs2, int masked)
 {
     fv_vcheck();
-    for (uint64_t i = 0; i < S.vl; i++)
+    for (uint64_t i = 0; i < FV_ECAP && i < S.vl; i++)
         if ((!masked || fv_mbit(0, i)) && fv_mbit(vs2, i)) return i;
     return ~0ULL;
 }
@@ -704,19 +713,19 @@ static inline void fv_vmem(int store, int mode, unsigned vd, uint64_t base, uint
     unsigned emul8 = mode == A_INDEXED ? S.lmul8 : fv_emul8(deew);
     unsigned regs = emul8 <= 8 ? 1 : emul8 / 8;
     FV_ASSERT(nf * regs <= 8, "segment group larger than 8 registers");
-    for (unsigned f = 0; f < nf; f++) fv_group_check(vd + f * regs, emul8, "memory vd group");
+    for (unsigned f = 0; f < 8 && f < nf; f++) fv_group_check(vd + f * regs, emul8, "memory vd group");
     if (mode == A_INDEXED) fv_group_check(vidx, (unsigned)((uint64_t)S.lmul8 * ieew / S.sew), "index group");
     unsigned bytes = deew / 8;
     int agn = FV_AGNOSTIC();
-    for (uint64_t i = 0; i < S.vl; i++) {
+    for (uint64_t i = 0; i < FV_ECAP && i < S.vl; i++) {
         if (masked && !fv_mbit(0, i)) {
-            if (!store) for (unsigned f = 0; f < nf; f++) fv_inactive(vd + f * regs, i, deew, agn);
+            if (!store) for (unsigned f = 0; f < 8 && f < nf; f++) fv_inactive(vd + f * regs, i, deew, agn);
             continue;
         }
         uint64_t elem = mode == A_UNIT ? base + i * nf * bytes
                       : mode == A_STRIDED ? base + i * stride
                       : base + fv_vget(vidx, i, ieew);
-        for (unsigned f = 0; f < nf; f++) {
+        for (unsigned f = 0; f < 8 && f < nf; f++) {
             uint64_t addr = elem + f * bytes;
             FV_ASSERT(addr % bytes == 0, "misaligned vector element access");
             if (store) fv_store(addr, bytes, fv_vget(vd + f * regs, i, deew));
@@ -724,14 +733,14 @@ static inline void fv_vmem(int store, int mode, unsigned vd, uint64_t base, uint
         }
     }
     if (!store)
-        for (unsigned f = 0; f < nf; f++) fv_tail(vd + f * regs, S.vl, deew, emul8, S.vta);
+        for (unsigned f = 0; f < 8 && f < nf; f++) fv_tail(vd + f * regs, S.vl, deew, emul8, S.vta);
 }
 
 /* whole-register loads/stores: n registers, ignore vl and vtype */
 static inline void fv_vmem_whole(int store, unsigned vd, uint64_t base, unsigned n)
 {
     FV_ASSERT(vd % n == 0 && vd + n <= 32, "whole-register group alignment");
-    for (unsigned b = 0; b < n * VLENB; b++) {
+    for (unsigned b = 0; b < 8 * VLENB && b < n * VLENB; b++) {
         if (store) fv_store(base + b, 1, S.v[vd * VLENB + b]);
         else S.v[vd * VLENB + b] = (uint8_t)fv_load(base + b, 1);
     }
@@ -742,7 +751,7 @@ static inline void fv_vmem_mask(int store, unsigned vd, uint64_t base)
 {
     fv_vcheck();
     uint64_t n = (S.vl + 7) / 8;
-    for (uint64_t b = 0; b < n; b++) {
+    for (uint64_t b = 0; b < (uint64_t)VLENB && b < n; b++) {
         if (store) fv_store(base + b, 1, S.v[vd * VLENB + b]);
         else S.v[vd * VLENB + b] = (uint8_t)fv_load(base + b, 1);
     }

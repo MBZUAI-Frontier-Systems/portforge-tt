@@ -1,0 +1,87 @@
+{
+ "family": "looprestoration-sgr5x5-8bpc",
+ "spec": {
+  "functions": "dav1d_sgr_filter_5x5_8bpc_rvv (c->sgr[0]) with the signature of decl_lr_filter_fn at BITDEPTH 8: (pixel *dst, ptrdiff_t stride, const pixel (*left)[4], const pixel *lpf, int w, int h, const LooprestorationParams *params, enum LrEdgeFlags edges)",
+  "formula": "sgr_5x5_c in context/reference_sgr.c at 8bpc: per row, 5x5 box sums of pixels and of squared pixels (edge pixels from left[], lpf rows, replication as in the C), then per pixel p = max(25*sumsq - sum*sum, 0), z = (p * s + (1 << 19)) >> 20 clamped to 255, x = dav1d_sgr_x_by_x[z], A = (x * sum * 164 + (1 << 11)) >> 12, B = x; then the two-row 5x5 weighted (5/6) finish filter (different rounding for row 0 and row 1), and the blend with weight w1, exactly as the C",
+  "domain": "1 <= w <= 384 (w == 256 when LR_HAVE_RIGHT), 1 <= h <= 64; params->sgr.s0 = 56, s1 = 0 for 5x5 (dav1d_sgr_params[14]); w0 in [-96, 31], w1 = 33 - w0; pixels 0..255",
+  "width_bounds": [
+   "box sums of 25 pixels need 13 bits; sums of 25 squares need 19 bits; p and p*s need 32-bit unsigned arithmetic with wrap, exactly as the C",
+   "writes past w in a dst row are allowed up to w rounded up to 64 pixels (checkasm padded-align); nothing else may change",
+   "the only symbol outside your file you may use is the table dav1d_sgr_x_by_x (256 bytes, read-only); every VLEN 128..1024; RVV 1.0 + Zba/Zbb"
+  ],
+  "regimes": {
+   "bench": "checkasm --bench: w=256, h=64, all edges, one cell: sgr_5x5_8bpc",
+   "check": "checkasm: random w, h, all 16 edge combinations, random w0"
+  }
+ },
+ "candidates": [
+  {
+   "id": "vla-stripmine",
+   "application": "one vsetvl-driven strip loop per row pass; the tail is a smaller vl",
+   "expected_gain": "no scalar epilogue",
+   "preconditions": [],
+   "sources": [
+    "catalogue"
+   ]
+  },
+  {
+   "id": "k:box-sliding",
+   "title": "Box sums by sliding adds",
+   "application": "horizontal 5-sums of pixels and squares from five shifted loads (or slides), vertical sums from five row buffers kept in a ring; never recompute 25 products per pixel",
+   "expected_gain": "each box sum is 4 adds per direction instead of 25 multiply-accumulates",
+   "preconditions": [],
+   "sources": [
+    "arm64 sgr_box5_row_h",
+    "x86 sgr_filter_5x5"
+   ]
+  },
+  {
+   "id": "k:table-gather",
+   "title": "x_by_x lookup by an indexed load or an in-register gather",
+   "application": "z is at most 255: vluxei8 from dav1d_sgr_x_by_x, or keep the 256-byte table in an LMUL-4 register group at VLEN 512 and use vrgather.vv with the 8-bit z as index",
+   "expected_gain": "replaces scalar table loads; in-register gather avoids memory latency",
+   "preconditions": [
+    "indices clamped to 0..255 before the lookup"
+   ],
+   "sources": [
+    "arm64 tbl on the table",
+    "x86 vpgatherdd"
+   ]
+  },
+  {
+   "id": "k:u32-wrap-mul",
+   "title": "p*s with the C's 32-bit wrap",
+   "application": "z = (p*s + (1<<19)) >> 20 must wrap at 32 bits: use e32 vmul (modular) and a logical vsrl, never a widening multiply",
+   "expected_gain": "correctness: 25*sumsq up to 1.6e6 makes p*s exceed 2^32 for the legal s range",
+   "preconditions": [],
+   "sources": [
+    "C reference sgr_calc_row_ab"
+   ]
+  },
+  {
+   "id": "widen-fused",
+   "application": "pixels widen u8 -> u16 -> u32 once per tap and stay in widened registers across the box-sum, weight and finish stages instead of re-widening",
+   "expected_gain": "fewer widen instructions per pixel",
+   "preconditions": [],
+   "sources": [
+    "catalogue"
+   ]
+  },
+  {
+   "id": "max-lmul",
+   "application": "run the per-row passes at the largest LMUL the register budget allows (box rows and finish rows are independent across x)",
+   "expected_gain": "fewer strip iterations",
+   "preconditions": [
+    "group bases stay aligned; widening source EMUL matches how data was written"
+   ],
+   "sources": [
+    "catalogue"
+   ]
+  }
+ ],
+ "mined_from": [
+  "dav1d d7a83f6e: src/looprestoration_tmpl.c sgr_5x5_c and helpers, src/tables.c dav1d_sgr_x_by_x, src/arm/looprestoration.h + src/arm/64/looprestoration*.S (sgr), src/x86/looprestoration_avx2.asm sgr_filter_5x5_8bpc, tests/checkasm/looprestoration.c",
+  "RVV catalogue",
+  "X280: VLEN 512, Zba/Zbb"
+ ]
+}

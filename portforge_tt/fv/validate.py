@@ -270,7 +270,7 @@ def run_validation(cfg, out_dir, vlens=(128, 512), trials=32, limit=None, log=pr
             bodies.append(f"static void fvf_t_{k}(void) {{ FV_ASSERT(0, \"unsupported\"); }}\n")
     results = {"tests": len(tests), "unsupported": unsupported, "vlens": {}}
     for vlen in vlens:
-        native = (f"#define FV_VLEN {vlen}\n#include \"fv_runtime.h\"\nconst fv_data FV_DATA[] = {{{{0, 0, 0}}}};\n"
+        native = (f"#define FV_VLEN {vlen}\n#include \"fv_runtime.h\"\nconst fv_data FV_DATA[FV_MAX_DATA] = {{{{0, 0, 0}}}};\n"
                   f"const int FV_NDATA = 0;\n" + "\n".join(bodies) + "\n"
                   + NATIVE_DRIVER % {"n": len(tests), "vlenb": vlen // 8, "hashmem": hashmem,
                                      "table": ", ".join(f"fvf_t_{k}" for k in range(len(tests)))})

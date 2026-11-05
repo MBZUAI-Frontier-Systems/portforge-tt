@@ -1,0 +1,79 @@
+{
+ "family": "refmvs-load_tmvs",
+ "spec": {
+  "functions": "dav1d_load_tmvs_rvv(const refmvs_frame *rf, int tile_row_idx, int col_start8, int col_end8, int row_start8, int row_end8)",
+  "formula": "load_tmvs_c in context/reference_refmvs.c: for every 8x8 block row in [row_start8, row_end8) and column in [col_start8, col_end8): read the candidate projection from rf->rp_ref[rf->mfmv_ref[n]] rows, scale each temporal MV by the per-(n,ref) distances rf->mfmv_ref2cur / rf->mfmv_ref2ref (the C's exact fixed-point scale with rounding and clipping to the MV range), write the projected MV and the reference index into rf->rp_proj; blocks whose candidate is invalid get ref = -1 / the C's INVALID_MV handling",
+  "domain": "1 <= n_mfmvs <= 7; tile column ranges up to the frame width in 8x8 blocks (checkasm: iw8 = 240, ih8 = 63, row window of 16); rp_stride = 240; every VLEN 128..1024; RVV 1.0 + Zba/Zbb",
+  "width_bounds": [
+   "MV scaling is the C's exact fixed-point arithmetic (sign, rounding, clip): reproduce it bit-exactly, including the INVALID_MV sentinel",
+   "rp_proj is written only in [row_start8, row_end8) x [col_start8, col_end8); rp_ref rows are read-only",
+   "refmvs_temporal_block and the projection layout are packed structs: mind the element widths and stride in bytes"
+  ],
+  "regimes": {
+   "bench": "checkasm --bench: full row window, all n_mfmvs references valid (mfmv_ref2cur/ref2ref = 1), one cell: load_tmvs",
+   "check": "checkasm: random tile column ranges, 3 references, random ref distances, invalid candidates present"
+  }
+ },
+ "candidates": [
+  {
+   "id": "vla-stripmine",
+   "application": "strip-mine the block columns with vsetvli; the column tail is a smaller vl",
+   "expected_gain": "no scalar epilogue over the row",
+   "preconditions": [],
+   "sources": [
+    "catalogue"
+   ]
+  },
+  {
+   "id": "k:distance-lut",
+   "title": "Per-(n, ref) scale factors staged in scalar registers or a small in-register table",
+   "application": "mfmv_ref2cur[n] and mfmv_ref2ref[n][r] are per-call constants; hoisting them out of the column loop (and folding the sign flips) removes per-block table loads",
+   "expected_gain": "inner loop reads only the projection buffers",
+   "preconditions": [],
+   "sources": [
+    "C reference load_tmvs_c"
+   ]
+  },
+  {
+   "id": "k:mv-scale-exact",
+   "title": "Bit-exact temporal scaling in e32",
+   "application": "the fixed-point MV scale (multiply by the distance ratio with the C's rounding and clipping) maps to vmul/vsmul plus vmin/vmax at e32, widening only where the C's precision requires",
+   "expected_gain": "vectorizes the arithmetic core without changing any rounding",
+   "preconditions": [
+    "INVALID_MV must map to the C's output, not a scaled value"
+   ],
+   "sources": [
+    "C reference load_tmvs_c",
+    "x86 refmvs"
+   ]
+  },
+  {
+   "id": "k:pack-proj",
+   "title": "Write rp_proj MV+ref as packed 8-byte units",
+   "application": "the projection entry packs the 32-bit MV and the reference index: assemble both in one register group and store once per block instead of two",
+   "expected_gain": "halves store count",
+   "preconditions": [
+    "the packed layout matches the struct, byte for byte"
+   ],
+   "sources": [
+    "refmvs.h refmvs_temporal_block"
+   ]
+  },
+  {
+   "id": "max-lmul",
+   "application": "row strips at the largest LMUL the register budget allows; the per-block work is independent across columns",
+   "expected_gain": "fewer strip iterations",
+   "preconditions": [
+    "group bases stay aligned"
+   ],
+   "sources": [
+    "catalogue"
+   ]
+  }
+ ],
+ "mined_from": [
+  "dav1d d7a83f6e: src/refmvs.c load_tmvs_c, src/refmvs.h, src/x86/refmvs.asm, tests/checkasm/refmvs.c check_load_tmvs",
+  "RVV catalogue",
+  "X280: VLEN 512, Zba/Zbb"
+ ]
+}

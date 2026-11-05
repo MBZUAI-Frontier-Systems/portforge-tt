@@ -1,0 +1,10 @@
+{
+ "noise_floor": 0.01,
+ "noise_floor_basis": "A/A of one checkasm binary twice in a session (splat_mv, 2026-10-29): within 0.64%",
+ "reference_cell": "sgr_5x5_8bpc",
+ "cells": [
+  "sgr_5x5_8bpc"
+ ],
+ "baseline": "C reference, timed in the same checkasm process (paired per round)",
+ "check": "checkasm --test=looprestoration_8bpc --function=sgr_5x5* at VLEN 128/256/512/1024 (G1), 8 more seeds at 128/1024 (G2), the X280 before timing; held-out seeds at certification"
+}
