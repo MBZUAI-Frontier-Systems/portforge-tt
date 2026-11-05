@@ -3,7 +3,7 @@
 Campaign pack for dav1d's hand-written assembly kernels, validated by checkasm
 (bit-exact vs the C reference) on QEMU and real RVV hardware, benchmarked on
 the X280. Different repo, same trusted-gate discipline as `ports/xnnpack-rvv/`
-- read `CONTRACT.md` for what "done" means and `portforge_tt/cpu/dav1d.py` for
+- read `CONTRACT.md` for what "done" means and `portforge_tt/remote/dav1d.py` for
 the tooling.
 
 ## Layout
@@ -11,7 +11,7 @@ the tooling.
 ```
 port.json        manifest: pinned upstream, gates (checkasm + differential + bench), anti-cheat
 CONTRACT.md      deliverable + gates + honesty rules (binding)
-TASK.md          the current campaign (mct hardware investigation + loopfilter port)
+TASK.md          the ordered plan of one family campaign (seeded into the workspace)
 SOURCES.md       pinned revisions, coverage survey, known hardware findings
 kernels/<name>/  per-campaign workspaces (asm, drivers, REPORT.md, submissions)
 ```

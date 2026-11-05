@@ -1,6 +1,6 @@
 """Adapter skeleton for a kernel pack. ports/xnnpack-rvv/evaluate.py is the reference.
 
-The kernel orchestrator's remote runner (portforge_tt/kernel/remote.py) calls:
+The host's gate runner (portforge_tt/remote/runner.py) calls:
 
   families() -> {family: entry}                     entry from families.json
   regimes_spec(family) -> dict                       kernels/<family>/regimes.json
@@ -24,7 +24,7 @@ def families():
 
 
 def regimes_spec(family):
-    raise NotImplementedError("load kernels/<family>/regimes.json with portforge_tt.cpu.regimes.load")
+    raise NotImplementedError("load kernels/<family>/regimes.json with portforge_tt.remote.regimes.load")
 
 
 def prepare_matrix(cfg, family, variants, tag="matrix", entry=None):

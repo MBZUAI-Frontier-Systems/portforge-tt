@@ -57,6 +57,8 @@
      "path": "src/riscv/64/pal.S"
     }
    ],
+   "verify": ["cbmc"],
+
    "fv": {
     "harness": "dav1d_wiener.c",
     "entries": {
@@ -133,6 +135,8 @@
      "path": "src/riscv/64/pal.S"
     }
    ],
+   "verify": ["cbmc"],
+
    "fv": {
     "harness": "dav1d_splat_mv.c",
     "entries": {
@@ -239,6 +243,8 @@
      "path": "src/riscv/64/pal.S"
     }
    ],
+   "verify": ["cbmc"],
+
    "fv": {
     "harness": "dav1d_sgr3x3.c",
     "entries": {
@@ -295,6 +301,8 @@
      "path": "src/riscv/64/pal.S"
     }
    ],
+   "verify": ["cbmc"],
+
    "fv": {
     "harness": "dav1d_lpf_uv.c",
     "entries": {
@@ -402,6 +410,8 @@
      "path": "src/riscv/64/pal.S"
     }
    ],
+   "verify": ["cbmc"],
+
    "fv": {
     "harness": "dav1d_sgr5x5.c",
     "entries": {
@@ -508,6 +518,8 @@
      "path": "src/riscv/64/pal.S"
     }
    ],
+   "verify": ["cbmc"],
+
    "fv": {
     "harness": "dav1d_sgrmix.c",
     "entries": {
@@ -530,59 +542,77 @@
    "baseline": "C reference (no upstream RVV at the pinned revision)",
    "bench_duration_us": 2000,
    "context": [
-    {
-     "name": "reference_refmvs.c",
-     "path": "src/refmvs.c",
-     "lines": [
-      719,
-      940
-     ]
-    },
-    {
-     "name": "refmvs.h",
-     "path": "src/refmvs.h"
-    },
-    {
-     "name": "checkasm_refmvs.c",
-     "path": "tests/checkasm/refmvs.c",
-     "lines": [
-      140,
-      230
-     ]
-    },
-    {
-     "name": "arm64_refmvs.S",
-     "path": "src/arm/64/refmvs.S",
-     "lines": [
-      1,
-      96
-     ]
-    },
-    {
-     "name": "x86_refmvs.asm",
-     "path": "src/x86/refmvs.asm",
-     "lines": [
-      1,
-      361
-     ]
-    },
-    {
-     "name": "x86_refmvs_avx2_avx512.asm",
-     "path": "src/x86/refmvs.asm",
-     "lines": [
-      700,
-      930
-     ]
-    },
-    {
-     "name": "riscv_asm.S",
-     "path": "src/riscv/asm.S"
-    },
-    {
-     "name": "riscv_example_pal.S",
-     "path": "src/riscv/64/pal.S"
-    }
+     {
+       "name": "reference_refmvs.c",
+       "path": "src/refmvs.c",
+       "lines": [
+         719,
+         940
+       ]
+     },
+     {
+       "name": "refmvs.h",
+       "path": "src/refmvs.h"
+     },
+     {
+       "name": "checkasm_refmvs.c",
+       "path": "tests/checkasm/refmvs.c",
+       "lines": [
+         140,
+         230
+       ]
+     },
+     {
+       "name": "arm64_refmvs_header.S",
+       "path": "src/arm/64/refmvs.S",
+       "lines": [
+         1,
+         106
+       ]
+     },
+     {
+       "name": "arm64_load_tmvs_neon.S",
+       "path": "src/arm/64/refmvs.S",
+       "lines": [
+         298,
+         535
+       ]
+     },
+     {
+       "name": "x86_refmvs_rodata.asm",
+       "path": "src/x86/refmvs.asm",
+       "lines": [
+         1,
+         120
+       ]
+     },
+     {
+       "name": "x86_load_tmvs_sse4.asm",
+       "path": "src/x86/refmvs.asm",
+       "lines": [
+         360,
+         596
+       ]
+     },
+     {
+       "name": "loongarch_load_tmvs_lsx.S",
+       "path": "src/loongarch/refmvs.S",
+       "lines": [
+         150,
+         489
+       ]
+     },
+     {
+       "name": "riscv_asm.S",
+       "path": "src/riscv/asm.S"
+     },
+     {
+       "name": "riscv_example_pal.S",
+       "path": "src/riscv/64/pal.S"
+     }
    ],
+   "verify": ["cbmc"],
+
    "fv": {
     "harness": "dav1d_load_tmvs.c",
     "entries": {

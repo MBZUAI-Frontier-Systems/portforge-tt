@@ -1,100 +1,86 @@
-"""Every pack is loadable, internally consistent, and free of site-specific detail."""
+"""Every kernel pack loads and freezes per family, TT packs are refused, and the tree is free of site detail."""
 import json
 from pathlib import Path
 import re
-import subprocess
-import sys
 import tempfile
 import unittest
 
-import support  # noqa: F401  (pack and registry setup)
-import port
-from cluster import identity
+import support  # noqa: F401  (repository and pack setup)
+from portforge_tt.control import port
+from portforge_tt.ranking import search
 
-HARNESS = support.HARNESS
 PACKS = sorted(path for path in (support.ROOT / "ports").iterdir() if (path / "port.json").is_file())
-KERNEL_PACKS = [path for path in PACKS
-                if json.loads((path / "port.json").read_text()).get("kind") == "kernel"]
-REAL = [path for path in PACKS if path.name != "template" and path not in KERNEL_PACKS]
+KERNEL_PACKS = [path for path in PACKS if json.loads((path / "port.json").read_text()).get("kind") == "kernel"]
+REAL = [path for path in KERNEL_PACKS if path.name != "template-kernel"]
+# Archived receipts and scripts of the manual campaigns (October 2026), kept in place on request.
+# They predate the site-detail rule; any other file with site detail fails.
+LEGACY = {"ports/dav1d-rvv/kernels/itx16-wide/cmp_bench.py", "ports/dav1d-rvv/kernels/itx16-wide/REPORT.md",
+          "ports/dav1d-rvv/kernels/itx16-wide/analyze_survey.py", "ports/xnnpack-rvv/kernels/qs8-vcvt/bench_table.py",
+          "ports/xnnpack-rvv/kernels/qs8-vcvt/submission-submission-20261019T134340Z/RECEIPT.json",
+          "ports/xnnpack-rvv/kernels/qs8-vmul-minmax-rndnu/submission-20261020T094536Z/RECEIPT.json",
+          "ports/xnnpack-rvv/kernels/qs8-vlrelu/submission-20261019T182939Z/RECEIPT.json"}
 
 
-def pinned_corpus_hash(pack):
-    match = re.search(r'^CORPUS_SHA256 = ["\']([0-9a-f]{64})["\']', (pack / "evaluate.py").read_text(), re.M)
-    return match and match.group(1)
+def campaign_families(pack):
+    """Families a campaign can target: those with a technique menu."""
+    families = json.loads((pack / "families.json").read_text())["families"]
+    return [f for f in sorted(families) if (pack / "kernels" / f / "TECHNIQUES.json").is_file()]
 
 
 class PortPackTests(unittest.TestCase):
-    def test_every_pack_loads_and_freezes(self):
-        self.assertEqual({path.name for path in REAL}, {"chronos2", "esm2", "nllb", "parakeet", "pocket_tts"})
+    def tearDown(self):
+        support.configure_port()
+
+    def test_every_campaign_family_loads_and_freezes(self):
+        self.assertEqual({p.name for p in REAL}, {"dav1d-rvv", "xnnpack-rvv"})
+        for pack in REAL:
+            families = campaign_families(pack)
+            self.assertTrue(families, pack.name)
+            for family in families:
+                with self.subTest(pack=pack.name, family=family), tempfile.TemporaryDirectory() as directory:
+                    loaded = port.configure(pack, family)
+                    for doc in ("CONTRACT.md", "TASK.md"):
+                        self.assertIn(doc, loaded["docs"])
+                    self.assertIn(family, loaded["title"])
+                    self.assertIn(loaded["source_name"], port.SOURCE_NAMES)
+                    self.assertTrue(set(loaded["verify"]) <= {"cbmc", "cvc5"})
+                    documents = port.seed_documents(loaded, port.PACKAGE / "guides", search.known(loaded))
+                    self.assertTrue(set(port.GUIDES + port.FAMILY_DOCS) <= set(documents))
+                    self.assertNotIn('"heldout"', documents["SPEC.md"])
+                    harness = Path(directory) / "harness"
+                    port.freeze_harness(harness)
+                    frozen = port.load_port(harness)
+                    self.assertEqual((frozen["key"], frozen["family"]), (loaded["key"], family))
+                    kernels = {p.name for p in (harness / "ports" / pack.name / "kernels").iterdir()}
+                    self.assertEqual(kernels, {family})
+                    files = port.host_files(harness)
+                    self.assertIn("portforge_tt/remote/runner.py", files)
+                    self.assertIn(f"ports/{pack.name}/evaluate.py", files)
+                    self.assertFalse(any(name.startswith(("portforge_tt/control/", "portforge_tt/agents/"))
+                                         for name in files))
+
+    def test_tt_model_packs_are_refused_with_a_pointer(self):
         for pack in PACKS:
-            with self.subTest(pack=pack.name), tempfile.TemporaryDirectory() as directory:
-                if pack in KERNEL_PACKS:
-                    spec = json.loads((pack / "port.json").read_text())
-                    self.assertEqual(spec["kind"], "kernel")
-                    for doc in ("CONTRACT.md", "TASK.md", "README.md"):
-                        self.assertTrue((pack / doc).is_file(), doc)
-                    continue
-                loaded = port.load_port(pack)
-                self.assertIn(loaded["key"], loaded["delivery_models"])
-                self.assertIn("CONTRACT.md", loaded["docs"])
-                self.assertIn(loaded["title"], loaded["objective"] + loaded["title"])
-                port.freeze(loaded, directory)
-                self.assertEqual(port.load_port(directory)["key"], loaded["key"])
-
-    def test_corpus_identity_agrees_between_manifest_evaluator_and_file(self):
-        for pack in REAL:
-            with self.subTest(pack=pack.name):
-                loaded = port.load_port(pack)
-                self.assertEqual(loaded["corpus_sha256"], pinned_corpus_hash(pack))
-                if loaded["corpus_path"]:
-                    self.assertEqual(identity(json.loads(loaded["corpus_path"].read_text())), loaded["corpus_sha256"])
-
-    def test_shipped_corpora_build_valid_suites_for_every_stage(self):
-        # Each pack's evaluator is a module named "evaluate", so build suites in a
-        # fresh interpreter per pack.
-        script = (
-            "import json, sys; sys.path[:0] = [sys.argv[1], sys.argv[2]]\n"
-            "import models; models.use_registry(sys.argv[1] + '/models.json')\n"
-            "import evaluate, portforge_eval\n"
-            "corpus = json.load(open(sys.argv[3]))\n"
-            "for stage in ('smoke', 'bringup', 'full'):\n"
-            "    spec, _ = evaluate.make_suite(corpus, stage)\n"
-            "    portforge_eval.check_suite(spec)\n"
-            "    print(stage, len(spec['cases']))\n")
-        for pack in REAL:
-            loaded = port.load_port(pack)
-            if not loaded["corpus_path"]:
+            if pack in KERNEL_PACKS:
                 continue
-            with self.subTest(pack=pack.name):
-                done = subprocess.run([sys.executable, "-c", script, str(pack), str(HARNESS), str(loaded["corpus_path"])],
-                                      capture_output=True, text=True)
-                self.assertEqual(done.returncode, 0, done.stderr)
-                self.assertEqual([line.split()[0] for line in done.stdout.split("\n") if line], ["smoke", "bringup", "full"])
-    def test_check_suite_rejects_consistency_cases_without_a_target(self):
-        from portforge_eval import check_suite
-        spec = {"stage": "full", "cases": [{"name": "batch4", "clips": ["a", "b"]},
-                                           {"name": "revisit", "clips": ["a", "b"], "compare_to": "batch",
-                                            "compare_rows": [0, 1]}]}
-        with self.assertRaisesRegex(ValueError, "missing case batch"):
-            check_suite(spec)
-        spec["cases"][1]["compare_to"] = "batch4"
-        self.assertIs(check_suite(spec), spec)
+            with self.subTest(pack=pack.name), self.assertRaisesRegex(ValueError, "tt branch"):
+                port.load_port(pack)
 
-    def test_every_evaluator_upload_ships_the_shared_module(self):
-        # evaluate.py imports portforge_eval; any site that uploads one must upload both.
-        import ast
-        source = (HARNESS / "portforge_loop.py").read_text()
-        for node in ast.walk(ast.parse(source)):
-            if isinstance(node, ast.Tuple) and all(isinstance(e, ast.Constant) for e in node.elts):
-                names = {e.value for e in node.elts}
-                if "evaluate.py" in names and "models.py" in names:
-                    self.assertIn("portforge_eval.py", names, ast.get_source_segment(source, node))
-        self.assertIn("'/portforge_eval.py'", (HARNESS / "runner.py").read_text())
+    def test_technique_menus_name_catalogue_or_local_ids(self):
+        known = search.catalogue()
+        for pack in REAL:
+            for family in campaign_families(pack):
+                doc = json.loads((pack / "kernels" / family / "TECHNIQUES.json").read_text())
+                with self.subTest(family=family):
+                    self.assertTrue(doc.get("spec"))
+                    self.assertTrue(all(c["id"] in known or c["id"].startswith("k:") for c in doc["candidates"]))
 
     def test_agent_documents_use_the_shared_tool_names(self):
-        stale = re.compile(r"\b(?:nllb|chronos|esm2?|parakeet)_(files|read|write|run|evaluate|status|log|submit)\b")
-        for path in list((support.ROOT / "ports").glob("*/*.md")) + list((HARNESS / "guides").glob("*.md")):
-            with self.subTest(path=path.name):
+        stale = re.compile(r"\bkernel_(?:files|read|write|compile|check)\b|python -m portforge_tt\.kernel")
+        paths = [p for pack in KERNEL_PACKS for p in pack.glob("*.md")] + list((support.HARNESS / "guides").glob("*.md")) \
+            + list((support.HARNESS / "prompts").glob("*.md"))
+        for path in paths:
+            with self.subTest(path=str(path.relative_to(support.ROOT))):
                 self.assertIsNone(stale.search(path.read_text()), path)
 
     def test_tree_has_no_site_specific_hosts_users_or_paths(self):
@@ -103,23 +89,23 @@ class PortPackTests(unittest.TestCase):
         # RFC 5737 documentation ranges are the intended placeholders in test fixtures.
         documentation = ("192.0.2.", "198.51.100.", "203.0.113.")
         # tt-metal is a vendored upstream checkout and paper/ is the manuscript;
-        # this check governs portforge's own tree. portforge-cpu.json is the
-        # operator's untracked planning export.
+        # this check governs portforge's own tree.
         excluded = {".git", ".claude", ".venv", "venv", "runs", "assets", "dist", "build",
                     "__pycache__", "portforge_tt.egg-info", "tt-metal", "paper"}
         skipped_names = {"corpus.json", "README.md", "portforge-cpu.json"}
         for path in support.ROOT.rglob("*"):
             if not path.is_file() or path.suffix not in (".py", ".md", ".json", ".yaml", ".sh"):
                 continue
-            if any(part in excluded for part in path.parts):
+            relative = path.relative_to(support.ROOT).as_posix()
+            if any(part in excluded for part in path.parts) or relative in LEGACY:
                 continue
             if path.name in skipped_names or path == Path(__file__):
                 continue
-            for match in pattern.finditer(path.read_text()):
+            for match in pattern.finditer(path.read_text(errors="replace")):
                 if match.group(0) == "127.0.0.1" or match.group(0).startswith(documentation):
                     continue
-                with self.subTest(path=str(path.relative_to(support.ROOT)), match=match.group(0)):
-                    self.fail(f"site-specific detail {match.group(0)!r} in {path.relative_to(support.ROOT)}")
+                with self.subTest(path=relative, match=match.group(0)):
+                    self.fail(f"site-specific detail {match.group(0)!r} in {relative}")
 
 
 if __name__ == "__main__":

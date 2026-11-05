@@ -17,4 +17,4 @@ kernel each optimized kernel came from + verdicts), `qs8_vadd_smoke/` (the
 first end-to-end differential + SMT smoke; `--dump-params` is the params
 pattern gate 2 needs), `xdiff_drivers/` (special-value drivers that caught the
 NaN bugs). Scripts assume the pre-restructure layout and are kept for
-provenance; the live tools are `portforge_tt.cpu` + `../evaluate.py`.
+provenance; the live tools are `portforge_tt.remote` + `../evaluate.py`.

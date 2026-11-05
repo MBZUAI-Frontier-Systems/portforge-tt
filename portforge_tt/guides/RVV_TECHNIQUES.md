@@ -1,6 +1,7 @@
 # RVV techniques
 
-Generated from `rvv_techniques.json` by `portforge_tt.kernel.catalogue.render`; edit the JSON.
+The technique catalogue of kernel campaigns: the controller parses the `## <category>` and
+``### `<id>`: <title>`` headings (ranking/search.py), so keep that shape when adding entries.
 Whether a technique worked is recorded per parent and combination in each run's search tree,
 not here: a technique rejected once is still worth combining with others.
 

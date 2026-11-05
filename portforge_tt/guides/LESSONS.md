@@ -1,74 +1,53 @@
-# Lessons from earlier campaigns (binding rules)
+# Lessons from earlier kernel campaigns (binding rules)
 
-Distilled from four Blackhole campaigns (NLLB-200, Chronos-2, ESM-2 and
-Parakeet TDT, September 2026) and a failed first NLLB attempt before them. Each
-rule cost hours to days when it was broken.
+Distilled from the XNNPACK (qs8-vcvt, qs8-vadd-minmax, qs8-vlrelu, x32-transposec) and dav1d
+(splat_mv, wiener, sgr, loopfilter, load_tmvs) campaigns on the SiFive X280, October-November 2026.
+Each rule cost hours when it was broken.
 
-## Order of work
+## Correctness
 
-1. **Baseline before port, port before optimization.** Measure PyTorch (and
-   ONNX/forge if installed) on the fixed suites from the TT host first, pass the
-   correctness gates second, optimize against the recorded baseline third. An
-   optimization claim without a preserved, matched baseline artifact is invalid.
-2. **Tiny tests during bring-up; the full corpus only at the end.** Use `smoke`
-   and small component checks until correct, `bringup` to gate, and `submit`
-   once, on frozen source. Never evaluate the full corpus during development.
-3. **One bounded step per turn; checkpoint STATE.md within about eight minutes.**
-   Batch routine gates on unchanged source (about four gates or six minutes),
-   then write STATE.md. For a promising step still running, save a one-line
-   checkpoint first and finish it, but never pass the 30-minute turn cap.
-4. **Prepare submission materials early.** Build the tt-metal-style package,
-   branch name, commit message and PR body as a mid-campaign milestone. The
-   operator reviews, signs and submits; agents never push or open PRs.
+1. **Every VLEN, not the board's.** The X280 has VLEN 512, but the gates run 128, 256, 512 and 1024.
+   Upstream XNNPACK transposes that hard-code 8 or 16 lanes are wrong at VLEN 128 (and 32x8 at 512).
+   Strip-mine with `vsetvli` and derive every tile size from `vl` or `vlenb`.
+2. **QEMU passing is not hardware passing.** Strided accesses whose offset is not a multiple of the
+   element width are implementation-defined; one dav1d kernel passed QEMU and failed on the X280.
+   The perf stage re-checks on the board before timing.
+3. **The domain is the init's, not the tests'.** Width bounds come from what the library's init can
+   produce (every quantization parameter, every tail), never from test values. Every narrowing needs a
+   range argument in NOTES.md; every dispatch predicate needs a proof that each path is exact on its
+   whole domain. Held-out regimes are drawn from that domain at certification.
+4. **Tails and edges are where ports break.** Run `port_run(command="check")` after every change; a
+   kernel that is right on full vectors and wrong on the last 3 elements is wrong.
 
-## Experiments
+## Performance on the X280
 
-5. **Never reset cards.** A timeout quarantines a card; only the controller's
-   preflight recovery re-admits it. Report and continue other work.
-6. **No repeat without a new hypothesis.** Rerunning an unchanged job to "see if
-   it works now" wastes device hours. For hangs, write a small timed reproducer.
-7. **Check the reference before trusting a failing probe.** A Chronos-2 worker
-   spent seven probe generations on "GEMM poisoning" that was really its own
-   test comparing `x @ W` on the host with a device holding `W.T`. When a
-   control that should pass fails, suspect the probe first.
-8. **Truncated logs are not a reason to rerun.** Page saved logs with
-   `port_log(job_id, offset_bytes=…)` and continue from `next_offset_bytes`.
-9. **Poll pending jobs; never duplicate them.** Use `port_status` and do
-   independent work while jobs run.
-10. **Files change only through `port_write`.** Edits made inside a
-    `port_run` job are discarded when the job ends; each job starts from the
-    written workspace.
+5. **ALU ops cost about 2 cycles per LMUL, narrowing about 4; latency hides only from m4 up.** Raise
+   LMUL until the widest stage of a widening chain is m8 unless the profile shows spills.
+6. **`vrgather` is element-serial** (cost grows with VL): prefer slides, segment loads or a small
+   in-register table at LMUL 1. A table gather won +45% in sgr3x3 only because the table fit one register.
+7. **Bandwidth bounds large cells.** L1 is about 32 bytes/cycle, DRAM about 0.7: 4M-element cells sat at
+   1.00x for every candidate. Do not spend turns on ALU tricks for DRAM-bound cells; the profile's bound
+   class says which cells can still move.
+8. **No libcalls in the hot loop.** XNNPACK builds RVV with `-march=rv64gcv` (no Zbb), so
+   `__builtin_ctz` becomes a `__ctzdi2` call: one such call cost a 0.79x cell.
+9. **Linux clobbers `vtype` on every syscall**; never rely on vector state across a call.
+10. **Code alignment moves timings by ~2%.** Identical kernels differed 2.4% unaligned and under 1%
+    aligned; treat sub-2% differences between structurally different kernels with suspicion.
 
-## Evidence
+## Measurement
 
-11. **Historical is not current.** A pass for an older source, cluster or suite
-    is context, never a current gate. Adding any non-Markdown file changes the
-    source identity, so gates must be rerun on the final source before submit.
-12. **Record what did not work.** Rejected hypotheses, with measurements, were
-    as valuable to reviewers as the wins.
-13. **Gates match the task and are never widened.** Token-exact decoding,
-    float NRMSE and task metrics (WER, chrF, weighted quantile loss) all appear
-    in earlier packs. If a decision flips, measure its margin: a near-tie in
-    the model itself is a documented limit, not a reason to change a gate.
-14. **Honest envelopes.** Inputs beyond the frozen envelope and features the
-    contract excludes are reported as unsupported, not implied.
-15. **Telling agents about held-out failures makes those cases non-blind.**
-    Operators may share a failing full-corpus case in general terms; the report
-    must then say that result is no longer a blind held-out measurement.
+11. **Only perf receipts rank.** Static profiles predict X280 cycles within a few percent for simple
+    loops; use them to choose what to try, never as the result.
+12. **One flagged cell is a suspicion.** Cross-session drift at DRAM-sized shapes exceeds the
+    in-session noise floor; a flag counts only when a second session at twice the rounds repeats it.
+13. **The board is shared.** The harness waits for it to be idle and leases it; never time anything
+    yourself and never interrupt another job.
 
-## Workspace and machines
+## Search
 
-16. **Keep the workspace small.** No recursive note archives, no embedded logs
-    in STATE.md, no copies of old runs.
-17. **Shared-machine discipline.** Touch nothing outside the campaign's
-    workspace and mounts, keep host load bounded, and never reset cards.
-18. **Package in tt-metal style from the start.** Follow existing model layouts
-    (`tt/ demo/ reference/ tests/ benchmarks/ docs/`, SPDX headers, a README
-    with measured evidence). A late layout change invalidated benchmark
-    provenance once.
-
-18. **Use the host repo's device fixture in upstream tests.** Tests that open a
-    TT device with ttnn.open_device(device_id=0) cannot take device_params from
-    CI. When contributing tests to an upstream repo, use its device pytest
-    fixture instead (the conftest at the repo root provides it). For portforge-tt
-    standalone testing, a local device fixture in tests/conftest.py is fine.
+14. **A rejected technique is rejected for one parent.** Width dispatch (+57% in splat_mv) and the
+    edge pre-pass (+13.7% in wiener) both lost earlier under other parents. Record every attempt in
+    TRANSFORMS.json so the search can tell combinations apart.
+15. **Read the other ISAs' implementations, then design for RVV.** The arm64 and x86 decompositions
+    are a good start, but RVV's length-agnostic loops, masks and widening ops often allow a simpler
+    structure (fewer passes, no transposes).

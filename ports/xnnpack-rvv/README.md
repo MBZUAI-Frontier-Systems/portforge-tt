@@ -3,7 +3,7 @@
 Campaign pack for kernel ports from ARM Neon to RVV, gated by XNNPACK's own
 tests, bounded formal equivalence (cvc5), and X280 hardware benchmarks.
 Deliverables target upstream XNNPACK PRs. See `CONTRACT.md` for what "done"
-means, `TASK.md` for the current campaign, and `portforge_tt/guides/RVV_GUIDE.md`
+means, `TASK.md` for the plan a campaign's worker follows, and `portforge_tt/guides/RVV_GUIDE.md`
 for engineering tactics and known traps.
 
 ## Layout
@@ -11,9 +11,10 @@ for engineering tactics and known traps.
 ```
 port.json        machine-readable manifest: repos, hardware, gates, anti-cheat rules
 CONTRACT.md      deliverable + gates + honesty rules (binding)
-TASK.md          the current campaign's ordered plan
+TASK.md          the ordered plan of one family campaign (seeded into the workspace)
 SOURCES.md       upstream revisions, merged PR precedents, in-repo evidence
-evaluate.py      the gates, as importable functions (agents call assess/submit)
+evaluate.py      the gate adapter the host's runner calls (prepare/check/bench_matrix, verify); assess/submit
+                 remain from the manual campaigns
 kernels/<family>/   per-kernel campaign workspaces (kernel.c, params.json, REPORT.md)
 research/        SALTyRN survey provenance: registry, bug evidence, the first smoke
 ```
@@ -56,7 +57,7 @@ Everything runs on the x86 host (`ssh tt_box`, repo `~/portforge-cpu/repo`).
 Python API only:
 
 ```python
-from portforge_tt.cpu import config
+from portforge_tt.remote import config
 import sys; sys.path.insert(0, "ports/xnnpack-rvv"); import evaluate
 cfg = config.load()
 evaluate.assess(cfg, "qs8-vcvt", "kernels/qs8-vcvt/kernel.c", name="xnn_qs8_vcvt_ukernel__rvv_pf1")

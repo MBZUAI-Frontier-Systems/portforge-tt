@@ -1,11 +1,11 @@
-"""dav1d-rvv adapter for the kernel orchestrator (python -m portforge_tt.kernel --pack ports/dav1d-rvv).
+"""dav1d-rvv adapter: the trusted gates of `portforge --port ports/dav1d-rvv --family <f>`.
 
 A candidate is one assembly file (kernel.S) that implements a family's
 functions in src/riscv/64/. The harness owns everything else: the per-family
 wiring (init header, the C init call, the meson entry) is applied to a pinned
 dav1d tree once per slot, and only the .S changes between candidates.
 
-Gates (each command below is remote_<command> for portforge_tt.kernel.remote):
+Gates (each command below is remote_<command> for portforge_tt.remote.runner):
   G0  the tree builds; the object defines every required symbol and references
       no undefined symbol (no C fallback, no other dav1d asm); static profile
   G1  checkasm (the project's own test: C reference vs RVV, bit-exact, random
@@ -16,7 +16,7 @@ Gates (each command below is remote_<command> for portforge_tt.kernel.remote):
       with the C reference timed in the same process (baseline = C: these
       families have no upstream RVV)
   G5  held-out seeds (never shown to workers) under QEMU at every VLEN and on
-      the X280, and the formal check (portforge_tt/fv: the built machine code
+      the X280, and the family's verify methods (verify/contract.py; cbmc: the built machine code
       lifted and proved equal to the C reference by CBMC on bounded sizes)
 """
 from concurrent.futures import ThreadPoolExecutor
@@ -29,7 +29,8 @@ import shutil
 import threading
 import time
 
-from portforge_tt.cpu import bench as pbench, calibrate, dav1d, host, profile, x280
+from portforge_tt.remote import bench as pbench, calibrate, dav1d, host, profile, x280
+from portforge_tt.verify import contract
 
 PACK = Path(__file__).resolve().parent
 REPO = PACK.parents[1]
@@ -340,7 +341,7 @@ def static_gate(cfg, family, out):
     prof = None
     try:
         prof = profile.function_profile(insns)
-        calib = calibrate.load(cfg) or json.loads((REPO / "portforge_tt/cpu/data/x280-calib.json").read_text())
+        calib = calibrate.load(cfg) or json.loads((REPO / "portforge_tt/remote/data/x280-calib.json").read_text())
         prof["predicted"] = [{"start": hex(s), **(profile.predict(insns, s, e, calib) or {})}
                              for s, e in profile.loops(insns)]
         hot = [x for x in prof["predicted"] if x.get("compute_cycles")]
@@ -420,7 +421,7 @@ def _record_binary(cfg, family, name, out):
     return dest / "checkasm"
 
 
-# ----------------------------------------------------------------------------- orchestrator commands
+# ----------------------------------------------------------------------------- runner commands (remote_<command>)
 
 def remote_gates(cfg, args):
     family = args["family"]
@@ -617,8 +618,7 @@ def remote_certify(cfg, args):
     held["x280"] = _row(x)
     passed = passed and x["passed"]
     result = {"heldout": {"passed": passed, **held}}
-    if entry.get("fv"):
-        from portforge_tt.fv import dav1d as fv_dav1d
-        result["smt"] = fv_dav1d.certify(cfg, family, entry, build_dir, cfg.workdir / args["out"] / "fv",
-                                         budget=args.get("smt_budget", 7200))
+    result["verify"] = [contract.run(method, cfg, family, entry, {"build_dir": build_dir},
+                                     cfg.workdir / args["out"] / method, args.get("verify_budget", 7200))
+                        for method in entry.get("verify", [])]
     return result

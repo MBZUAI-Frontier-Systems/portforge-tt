@@ -17,12 +17,13 @@ memory, which keeps every turn auditable.
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 
 if __package__ and "." in __package__:  # installed inside portforge_tt
-    from ..runtime import job
-    from ..port import load_port
+    from ..control.runtime import job
+    from ..control.port import load_port
 else:  # frozen flat harness: this package sits at the top level
     from runtime import job
     from port import load_port
@@ -249,7 +250,8 @@ def parse_decision(text):
         return value
     if not isinstance(text, str) or len(text) > 4000:
         raise ValueError("invalid supervisor response size")
-    value = json.loads(text, object_pairs_hook=unique)
+    fenced = re.fullmatch(r"\s*```(?:json)?\s*\n(.*?)\n\s*```\s*", text, re.S)  # one markdown fence
+    value = json.loads(fenced.group(1) if fenced else text, object_pairs_hook=unique)
     if (not isinstance(value, dict) or set(value) != {"action", "instruction"}
             or value["action"] not in ("continue", "pause")
             or not isinstance(value["instruction"], str)

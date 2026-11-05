@@ -13,7 +13,7 @@ struct. The harness renames and registers it next to the kernel it was ported fr
   bytes after the output; floats additionally against special values (NaN, ±0, ±inf,
   subnormals).
 - G5 (certification only): held-out regimes the workers never see, bounded SMT
-  equivalence against the source-ISA kernel where the verifier supports the family,
+  equivalence (the family's verify methods, verify/contract.py) where one applies,
   the tests on the X280, and a second timing session.
 
 ## Speed (objective after the gates)

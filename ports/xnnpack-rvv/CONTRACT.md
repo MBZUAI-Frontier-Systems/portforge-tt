@@ -1,76 +1,49 @@
-# CONTRACT: XNNPACK RVV kernel ports
+# CONTRACT: XNNPACK RVV microkernels
 
-Read this fully before writing code. It defines what "done" means. The gates are
-mechanical: either the tool reports a pass or it does not, and you can run every
-one of them yourself before submitting.
+A candidate is one C file (`kernel.c`) with `<riscv_vector.h>` intrinsics implementing the family's
+ukernel. The harness registers it next to its template kernel, builds XNNPACK, and owns the tests,
+the regime matrix, the board and the formal check.
+
+## Rules (the gates enforce all of them)
+
+1. **Exact on the init's whole domain.** Bit-exact with the scalar reference for EVERY parameter value
+   XNNPACK's init can produce (qs8 multipliers reach 2^21 and shifts 30; float families see NaN, ±0,
+   ±inf and subnormals), every batch size including tails, every input, and every VLEN from 128 to 1024.
+   Width bounds come from the init's domain, never from test values. Held-out parameter regimes are
+   checked at certification.
+2. **Proven dispatch only.** Parameter dispatch is allowed only on predicates you prove make each path
+   exact on its whole domain; never special-case particular values. Write each predicate's proof
+   sketch, and every narrowing's range argument, in NOTES.md.
+3. **Interface.** Keep the template's signature, params struct and `XNN_OOB_READS` semantics: you may
+   over-read within the padded tile, never over-write. No `_tu`/`_mu` intrinsics (the formal check has
+   no shims for them). No libgcc calls in the hot path (XNNPACK builds RVV with `-march=rv64gcv`: no
+   Zbb, so `__builtin_ctz` becomes a call).
+4. **Vector work.** The hot loop must be vector code; no scalar fallback for the bulk of the work.
+
+Transpose families (`x32-transposec`) instead: exact for every block shape (tails included), every
+stride at least the block's row size (any multiple of 4 bytes), 4-byte-aligned pointers and every
+VLEN; bytes between `block_height*4` and `output_stride` in each output row stay untouched; dispatch
+only on the block shape, the strides and `vlenb`, never on data.
+
+## Gates
+
+| gate | what | where |
+|---|---|---|
+| G0 | compiles in XNNPACK's build; static profile | x86 host |
+| G1 | the family's gtests at VLEN 128/512/1024 | QEMU |
+| G2 | bit-exact check over every (non-held-out) regime of the matrix | QEMU |
+| G3/G4 | the same check on the X280, then bench rounds over the matrix against the best upstream RVV kernel per cell | X280 |
+| G5 | held-out regimes under QEMU and on the X280; cvc5 equivalence against the Neon kernel over params from the init | certification |
+
+`port_evaluate(stage="check")` runs G0-G2, `stage="perf"` runs G0-G4; G5 runs after `port_submit`.
 
 ## Deliverable
 
-One RVV microkernel per campaign, delivered as:
-
-1. `kernels/<family>/kernel.c` — the ukernel, function name
-   `xnn_<family>_ukernel__rvv_<yoursuffix>`, pure C with `<riscv_vector.h>`
-   intrinsics (no inline asm for the v1 packs), self-contained apart from
-   XNNPACK headers it genuinely needs.
-2. A registration line for the family's `.inc` registry (the tools clone the
-   template's line; you check tiles/params still make sense).
-3. `kernels/<family>/REPORT.md` — what you tried, what the gates said, and the
-   final numbers. This is the document a reviewer (human or agent) reads first.
-
-For an actual upstream PR the kernel must additionally be expressed through
-XNNPACK's Python generator templates where the family uses them (see the merged
-PRs in SOURCES.md); the campaign REPORT says exactly what is left to do for that.
-
-## Interface rules
-
-- Keep the template ukernel's signature, tile parameters, and params struct.
-  The registry line is cloned from the template (usually the Neon variant);
-  if your kernel needs different tiles (e.g. vector-length tiles), say so in
-  REPORT.md and register from the closest RVV template instead.
-- `XNN_OOB_READS` families may over-read within the padded tile; they may never
-  over-write. If you rely on OOB reads, say where.
-- Params come to you through XNNPACK's init functions. Assume every value those
-  functions can produce will occur. qs8 multipliers reach 2^21 and shifts 30;
-  float families produce NaN/±0/inf inputs. "The tests never do that" is not an
-  argument; several published kernels broke exactly this way.
-
-## Gates (all must pass; run them yourself)
-
-Order matters: cheap and specific first, expensive and general last.
-
-1. **Build + XNNPACK tests** — `evaluate.test(cfg, kernel, ...)`: your kernel
-   registered next to its template, the family's gtest binary under QEMU at
-   VLEN 128, 256, 512, 1024, and on the X280 when available. Zero failures.
-   The gtest compares against XNNPACK's scalar kernel in-process.
-2. **Bounded formal equivalence** — `evaluate.verify(cfg, kernel, ...)`: cvc5,
-   Neon source vs your kernel, `configs` mode with parameters from XNNPACK's
-   init code (`--dump-params` pattern), `max_batch` capped so every config is
-   reached, budget >= 600 s. Verdict must be `ALL_PASSED`. `PARTIAL` means the
-   sweep never finished: raise the budget or lower `max_batch`, never submit it.
-   `COUNTEREXAMPLE` is gold: replay it via `evaluate.xdiff`/a driver, fix, retry.
-   `MISSING_INTRINSIC` means the verifier lacks a shim for an intrinsic you used;
-   either pick a shimmed intrinsic or report it and justify the gap.
-3. **Benchmark** — `evaluate.bench(cfg, kernel, ...)`: XNNPACK's benchmark on
-   the X280 (or note FireSim/QEMU-only). Compare per shape against (a) the
-   scalar ukernel, (b) every existing RVV variant of the family. A pass needs:
-   clearly faster than scalar; not slower than the best RVV variant unless
-   REPORT.md argues why upstream still wants the kernel (e.g. it removes the
-   only non-RVV fallback at some VLEN).
-4. **Review pass** — reread your kernel as if you were the XNNPACK maintainer:
-   naming, comments explaining the loop structure and the tail policy, no dead
-   variants, no magic numbers without derivation, no shape/value special-casing.
-
-Without an X280, gate 3 runs under QEMU-timing only for smoke purposes and the
-campaign REPORT must say "no hardware numbers"; QEMU timing is never evidence
-of speed.
+`kernel.c`, `TRANSFORMS.json` (parent, applied technique ids, novel ideas) and `NOTES.md` (design,
+proofs of dispatch predicates and narrowings, measured numbers). For an upstream PR the kernel is
+later expressed through XNNPACK's generator templates (see SOURCES.md).
 
 ## Honesty rules
 
-- The evaluator and the oracle are not yours to modify. Never edit files under
-  `portforge_tt/` to make a gate pass; if a tool looks wrong, say so in
-  REPORT.md and work around it.
-- Report failures verbatim. A fixed kernel keeps its history: gate receipts are
-  appended to REPORT.md, never rewritten.
-- If you cannot meet a gate, deliver the best state with REPORT.md saying
-  exactly which gate fails and why. A correct kernel at 0.9x is a result; a
-  fast kernel with a loophole is not.
+- The tests, the oracle and the gates are the trusted side; you cannot change them.
+- A kernel that is correct but slower than upstream is a result; a fast kernel with a loophole is not.

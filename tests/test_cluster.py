@@ -1,154 +1,68 @@
-"""Inventory parsing, explicit SSH transport and durable job identity."""
-import support  # noqa: F401  (pack and registry setup)
-import copy
-import json
+"""control/cluster.py: inventory parsing and the detached, polled remote call."""
 from pathlib import Path
-import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest import mock
 
-import cluster
-from runner import write_json
+import support  # noqa: F401
+from portforge_tt.control import cluster
+
+CONFIG = {'host': {'host': '192.0.2.10', 'user': 'pf', 'key': '/keys/pf', 'work_dir': '/work/pf',
+                   'python': '/usr/bin/python3', 'resources': {'host': 1, 'board': 1}}}
 
 
-class ClusterTests(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
-        self.raw = {'cluster_name': 'test', 'provider': {'head_ip': '127.0.0.1'},
-            'auth': {'ssh_user': 'tt-user', 'ssh_private_key': '~/.ssh/tt-test',
-                     'overrides': {'192.0.2.2': {'ssh_user': 'gpu-user', 'ssh_private_key': '~/.ssh/gpu-test'}}},
-            'available_node_types': {
-                'tt': {'compatible_ips': ['192.0.2.1'], 'num_workers': 1, 'resources': {'tt': 4}},
-                'reference': {'compatible_ips': ['192.0.2.2'], 'num_workers': 1, 'resources': {'reference': 1}}},
-            'porting': {'tt': {'work_dir': '/srv/tt jobs', 'python': '/env/tt/bin/python'},
-                        'reference': {'work_dir': '/srv/ref', 'python': '/env/gpu/bin/python',
-                                      'executor': 'direct', 'hf_home': '/models/cache'}}}
+class InventoryTests(unittest.TestCase):
+    def load(self, text):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'cluster.yaml'
+            path.write_text(text)
+            return cluster.load(path)
 
-    def tearDown(self):
-        self.temp.cleanup()
+    def test_host_role_and_default_resources(self):
+        config = self.load('auth: {ssh_user: pf, ssh_private_key: /keys/pf}\n'
+                           'available_node_types: {host: {compatible_ips: [192.0.2.10]}}\n'
+                           'porting: {host: {work_dir: /work/pf, python: /usr/bin/python3}}\n')
+        self.assertEqual(config['host']['resources'], {'host': 1, 'board': 1})
+        self.assertEqual((config['host']['host'], config['host']['user']), ('192.0.2.10', 'pf'))
 
-    def load(self, raw=None):
-        path = self.root / 'cluster.yaml'
-        path.write_text(json.dumps(raw or self.raw))
-        return cluster.load(path)
+    def test_placeholders_and_relative_paths_are_rejected(self):
+        for porting in ('{work_dir: <work>, python: /usr/bin/python3}', '{work_dir: pf, python: /usr/bin/python3}'):
+            with self.subTest(porting=porting), self.assertRaises(ValueError):
+                self.load('auth: {ssh_user: pf, ssh_private_key: /keys/pf}\n'
+                          'available_node_types: {host: {compatible_ips: [192.0.2.10]}}\n'
+                          'porting: {host: ' + porting + '}\n')
 
-    def test_native_schema_resolves_per_host_auth_and_resources(self):
-        config = self.load()
-        self.assertEqual(config['tt']['host'], '192.0.2.1')
-        self.assertEqual(config['tt']['user'], 'tt-user')
-        self.assertEqual(config['reference']['user'], 'gpu-user')
-        self.assertEqual(config['reference']['key'], str(Path.home() / '.ssh/gpu-test'))
-        self.assertEqual(config['tt']['resources']['tt'], 4)
 
-    def test_inventory_rejects_ambiguous_hosts_unsafe_paths_and_executor(self):
-        invalid = []
-        multiple = copy.deepcopy(self.raw)
-        multiple['available_node_types']['tt']['compatible_ips'].append('192.0.2.3')
-        invalid.append(multiple)
-        relative = copy.deepcopy(self.raw)
-        relative['porting']['tt']['python'] = 'relative/python'
-        invalid.append(relative)
-        executor = copy.deepcopy(self.raw)
-        executor['porting']['reference']['executor'] = 'unapproved'
-        invalid.append(executor)
-        for raw in invalid:
-            with self.subTest(raw=raw), self.assertRaises(ValueError):
-                self.load(raw)
+class RemoteTests(unittest.TestCase):
+    def test_remote_detaches_then_polls_until_the_exit_marker(self):
+        calls = []
 
-    def test_ssh_ignores_aliases_and_requires_explicit_identity_and_host_verification(self):
-        endpoint = {**self.load()['reference'], 'known_hosts': '~/.ssh/test-known', 'host_key_alias': 'gpu-instance'}
-        with patch.object(cluster.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, b'ok', b'')) as run:
-            self.assertEqual(cluster.ssh(endpoint, 'echo hello', b'data', 30), b'ok')
-        args = run.call_args.args[0]
-        self.assertEqual(args[:3], ['ssh', '-F', '/dev/null'])
-        for option in ('BatchMode=yes', 'IdentitiesOnly=yes', 'StrictHostKeyChecking=yes', 'HostKeyAlias=gpu-instance'):
-            self.assertIn(option, args)
-        self.assertEqual(args[-3:], ['--', '192.0.2.2', 'echo hello'])
-        self.assertEqual(args[args.index('-i') + 1], endpoint['key'])
-        self.assertEqual(args[args.index('-l') + 1], 'gpu-user')
-        self.assertEqual(run.call_args.kwargs['input'], b'data')
+        def ssh(endpoint, command, data=None, timeout=90):
+            calls.append(command)
+            if command.startswith('nohup'):
+                return b''
+            if len([c for c in calls if c.startswith('cat ')]) < 3:
+                raise RuntimeError('not done')  # the .done file is missing while the job runs
+            return b'0\n{"ok": true, "results": {}}\n@@@\n'
 
-    def test_model_checkpoint_inventory_is_explicit_and_validated(self):
-        raw = copy.deepcopy(self.raw)
-        raw['porting']['tt']['weights_by_model'] = {'parakeet': '/models/parakeet'}
-        self.assertEqual(self.load(raw)['tt']['weights_by_model']['parakeet'], '/models/parakeet')
-        for value in ({'unknown-model': '/models/ambiguous'}, {'parakeet': '../relative'},
-                      {'parakeet': '/models/../other'}, {'parakeet': 1}, []):
-            raw['porting']['tt']['weights_by_model'] = value
-            with self.subTest(value=value), self.assertRaises(ValueError):
-                self.load(raw)
+        with mock.patch.object(cluster, 'ssh', ssh), mock.patch.object(cluster, 'upload') as upload, \
+                mock.patch.object(cluster.time, 'sleep'):
+            result = cluster.remote(CONFIG, '/runs/r1', {'kind': 'gates', 'family': 'f'}, timeout=600)
+        self.assertTrue(result['ok'])
+        self.assertTrue(result['rpc'].startswith('runs/r1/rpc/gates-'))
+        self.assertIn('-m portforge_tt.remote.runner gates', calls[0])
+        self.assertIn('/work/pf/runs/r1/harness', calls[0])
+        self.assertEqual(upload.call_args.args[1], '/work/pf/runs/r1/rpc')
 
-    def test_direct_and_slurm_launch_once_then_reuse_record(self):
-        for executor in ('direct', 'slurm'):
-            endpoint = {**self.load()['reference'], 'executor': executor, 'slurm': {'partition': 'gpu'}}
-            record = self.root / (executor + '.json')
-            with patch.object(cluster, 'upload') as upload, patch.object(cluster, 'ssh', side_effect=[b'12345\n', b'0\n']) as ssh:
-                cluster.reference_job(endpoint, '/srv/ref/job', 'python reference.py', True, record)
-                upload.assert_called_once()
-                script = upload.call_args.args[2]['job.sh']
-                self.assertIn('flock -n 9', script)
-                self.assertIn('PORTFORGE_REFERENCE_EXECUTION=' + executor, script)
-                self.assertEqual('.gpu-reference.lock' in script, executor == 'direct')
-                launch = ssh.call_args_list[0].args[1]
-                self.assertIn('sbatch' if executor == 'slurm' else 'nohup timeout', launch)
-            with patch.object(cluster, 'upload') as upload, patch.object(cluster, 'ssh', return_value=b'0\n') as ssh:
-                cluster.reference_job(endpoint, '/srv/ref/job', 'python reference.py', True, record)
-                upload.assert_not_called()
-                self.assertEqual(ssh.call_count, 1)
-                self.assertNotIn('sbatch', ssh.call_args.args[1])
-                self.assertNotIn('nohup', ssh.call_args.args[1])
+    def test_a_crash_without_json_is_reported(self):
+        def ssh(endpoint, command, data=None, timeout=90):
+            return b'' if command.startswith('nohup') else b'1\nTraceback\n@@@\nboom\n'
 
-    def test_cpu_reference_preparation_does_not_hold_gpu_lease(self):
-        endpoint = self.load()['reference']
-        with patch.object(cluster, 'upload') as upload, patch.object(cluster, 'ssh', side_effect=[b'99\n', b'0\n']):
-            cluster.reference_job(endpoint, '/srv/ref/preparation', 'prepare', False, self.root / 'cpu-job.json')
-        self.assertNotIn('.gpu-reference.lock', upload.call_args.args[2]['job.sh'])
-
-    def test_remote_runner_quotes_paths_and_uses_configured_endpoint(self):
-        config = self.load()
-        with patch.object(cluster, 'ssh', return_value=b'{"cards": []}') as ssh:
-            self.assertEqual(cluster.remote(config, self.root / 'run', {'kind': 'health'}), {'cards': []})
-        endpoint, command, body, timeout = ssh.call_args.args
-        self.assertEqual(endpoint, config['tt'])
-        self.assertIn("'/srv/tt jobs/run/harness/runner.py'", command)
-        self.assertEqual(json.loads(body), {'kind': 'health'})
-
-    def test_polling_failure_preserves_submitted_job_record(self):
-        endpoint, record = self.load()['reference'], self.root / 'job.json'
-        saved = {'directory': '/srv/ref/job', 'endpoint_sha256': cluster.identity(endpoint),
-                 'submission': 'submitted', 'job': '12345'}
-        write_json(record, saved)
-        with patch.object(cluster, 'ssh', side_effect=RuntimeError('SSH disconnected')) as ssh, \
-             patch.object(cluster.time, 'sleep'):
-            with self.assertRaisesRegex(RuntimeError, 'transport unavailable'):
-                cluster.reference_job(endpoint, '/srv/ref/job', 'run', True, record)
-            self.assertEqual(ssh.call_count, 6)
-        self.assertEqual(json.loads(record.read_text()), saved)
-
-    def test_ambiguous_submission_records_intent_and_never_submits_again(self):
-        endpoint, record = self.load()['reference'], self.root / 'job.json'
-        with patch.object(cluster, 'upload'), patch.object(cluster, 'ssh', side_effect=subprocess.TimeoutExpired('ssh', 90)):
-            with self.assertRaises(subprocess.TimeoutExpired):
-                cluster.reference_job(endpoint, '/srv/ref/job', 'run', True, record)
-        self.assertEqual(json.loads(record.read_text())['submission'], 'intent')
-        with patch.object(cluster, 'upload') as upload, patch.object(cluster, 'ssh') as ssh:
-            with self.assertRaisesRegex(RuntimeError, 'ambiguous'):
-                cluster.reference_job(endpoint, '/srv/ref/job', 'run', True, record)
-            upload.assert_not_called()
-            ssh.assert_not_called()
-
-    def test_saved_job_refuses_changed_machine_or_directory(self):
-        endpoint, record = self.load()['reference'], self.root / 'job.json'
-        write_json(record, {'directory': '/srv/ref/job', 'endpoint_sha256': cluster.identity(endpoint),
-                            'submission': 'submitted', 'job': '12345'})
-        with patch.object(cluster, 'ssh') as ssh:
-            for changed, directory in (({**endpoint, 'host': '192.0.2.8'}, '/srv/ref/job'),
-                                       (endpoint, '/different')):
-                with self.assertRaises(ValueError):
-                    cluster.reference_job(changed, directory, 'run', True, record)
-            ssh.assert_not_called()
+        with mock.patch.object(cluster, 'ssh', ssh), mock.patch.object(cluster, 'upload'), \
+                mock.patch.object(cluster.time, 'sleep'):
+            result = cluster.remote(CONFIG, '/runs/r1', {'kind': 'bench'}, timeout=60)
+        self.assertFalse(result['ok'])
+        self.assertIn('boom', result['error'])
 
 
 if __name__ == '__main__':

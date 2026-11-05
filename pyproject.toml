@@ -5,12 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "portforge-tt"
 version = "2.0.0"
-description = "Autonomous model porting to Tenstorrent hardware with TTNN: supervisor/worker agents, trusted FP32 evaluator, sandboxed TT jobs"
+description = "Autonomous kernel porting to RISC-V Vector: supervisor/worker agents, trusted gates under QEMU and on a SiFive X280, formal verification of the shipped code"
 readme = "README.md"
 license = "BSD-3-Clause"
 requires-python = ">=3.10"
 authors = [{ name = "Abror Shopulatov" }]
-keywords = ["tenstorrent", "ttnn", "model-porting", "autonomous", "agents", "mcp", "hardware"]
+keywords = ["risc-v", "rvv", "kernel-porting", "autonomous", "agents", "mcp", "formal-verification"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
@@ -22,21 +22,23 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn>=0.30",
     "pyyaml>=6.0",
-    "numpy>=1.24.0",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "pre-commit>=3.0"]
 
 [project.scripts]
-portforge = "portforge_tt.portforge_loop:main"
+portforge = "portforge_tt.control.controller:main"
 
 [tool.setuptools]
-packages = ["portforge_tt", "portforge_tt.agents", "portforge_tt.cpu"]
+packages = ["portforge_tt", "portforge_tt.agents", "portforge_tt.control", "portforge_tt.ranking", "portforge_tt.remote",
+            "portforge_tt.verify", "portforge_tt.verify.cbmc", "portforge_tt.verify.cvc5"]
 
 [tool.setuptools.package-data]
 portforge_tt = ["prompts/*.md", "guides/*.md"]
-"portforge_tt.cpu" = ["data/*.json", "docker/Dockerfile", "tools/*", "README.md"]
+"portforge_tt.remote" = ["data/*.json", "docker/Dockerfile", "tools/*", "tools/*/*", "README.md"]
+"portforge_tt.verify" = ["README.md"]
+"portforge_tt.verify.cbmc" = ["*.h", "harness/*.c", "README.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

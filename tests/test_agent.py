@@ -12,8 +12,8 @@ import unittest
 import unittest.mock
 from unittest.mock import patch
 
-import agents.agent as agent
-from agents.errors import (RateLimitError, AuthenticationError, BillingError,
+from portforge_tt.agents import agent
+from portforge_tt.agents.errors import (RateLimitError, AuthenticationError, BillingError,
                            InvalidRequestError)
 
 
@@ -55,6 +55,11 @@ class AgentTests(unittest.TestCase):
                 agent.parse_decision(json.dumps(value))
         with self.assertRaises(ValueError):
             agent.parse_decision('{"action":"continue","action":"pause","instruction":"x"}')
+        # Models sometimes wrap the reply in one markdown fence; anything else around it is still rejected.
+        self.assertEqual(agent.parse_decision('```json\n%s\n```' % json.dumps(valid)), valid)
+        self.assertEqual(agent.parse_decision('```\n%s\n```\n' % json.dumps(valid)), valid)
+        with self.assertRaises(ValueError):
+            agent.parse_decision('Here it is:\n```json\n%s\n```' % json.dumps(valid))
 
     def test_isolation_config_denies_host_writes_exec_and_secrets(self):
         tool = SimpleNamespace(name='parakeet_tools', hostname='127.0.0.1', port=8000)
@@ -280,7 +285,7 @@ class AgentTests(unittest.TestCase):
                 self.assertGreater(prompt.index('FINAL RESPONSE PROTOCOL'), prompt.index('ENTIRE ROADMAP'))
                 self.assertIn('200-700 characters', prompt)
                 self.assertIn('ONE bounded', prompt)
-                self.assertIn('roughly six minutes', prompt)
+                self.assertIn('25 minutes', prompt)
             self.assertIn('2196 characters', mocked.call_args_list[1].args[4])
             failed = json.loads((Path(root) / result['attempt_records'][0]).read_text())
             self.assertEqual(failed['instruction_characters'], 2196)
@@ -315,9 +320,9 @@ class AgentTests(unittest.TestCase):
             self.assertIn(phrase, agent.WORKER_HANDOFF)
         body = agent.read_prompt("worker", support.PORT)
         self.assertIn("strong guidance", body)
-        self.assertIn("BENCHMARK.md", body)
-        self.assertIn(support.PORT["repo_id"], body)
-        self.assertNotIn("{repo_id}", body)
+        self.assertIn("TECHNIQUES.md", body)
+        self.assertIn(support.PORT["title"], body)
+        self.assertNotIn("{title}", body)
 
     def test_phase_worker_retains_compact_batched_handoff_and_scoped_tools(self):
         tree = ast.parse(inspect.getsource(agent.worker_node._original))

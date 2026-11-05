@@ -1,18 +1,18 @@
-"""PortForge-TT: autonomous model porting to Tenstorrent hardware.
+"""PortForge: autonomous kernel porting to RISC-V Vector.
 
 A supervisor agent plans one bounded unit of work at a time; a worker agent
-researches the model, writes the TTNN backend, and runs isolated jobs on a TT
-card through scoped MCP tools. A trusted evaluator compares every candidate
-with an independent FP32 reference, first on small suites and finally, once,
-on a frozen held-out corpus.
+ports and optimizes one kernel family through scoped MCP tools. Every
+candidate is gated by the project's own tests and a bit-exact check under
+QEMU at VLEN 128-1024, timed on a SiFive X280 against the best existing
+kernel, and the final source is certified on held-out regimes and by formal
+verification of the shipped code.
 
-The package is self-contained (no CHIA/Ray dependency): ``runtime`` provides
-local resource leases and background jobs, ``mcpserver`` serves the agent
-tools over FastMCP, and ``agents`` wraps the ``opencode``, ``claude`` and
-``codex`` CLIs. The top-level modules also run *flat* — a campaign freezes
-the harness source into ``runs/<run>/harness/`` and re-executes those plain
-files — which is why sibling imports there use the ``if __package__:`` shim
-and ``agents`` keeps working as a top-level package inside the harness.
+``control/`` runs a campaign (``portforge`` is control/controller.py),
+``ranking/`` ranks passing candidates, ``remote/`` is what the x86 host runs
+(toolchain image, QEMU, board), ``verify/`` holds the formal methods behind
+one contract, and ``agents/`` wraps the opencode, claude and codex CLIs. A
+campaign freezes this package and its pack into ``runs/<run>/harness/`` and
+runs from that copy on both machines.
 """
 
 __version__ = "2.0.0"

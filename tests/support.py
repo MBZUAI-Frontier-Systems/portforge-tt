@@ -1,27 +1,24 @@
-"""Shared test setup: point the harness at a real pack (Parakeet) without hardware.
+"""Shared test setup: point the harness at a real kernel pack (dav1d-rvv, refmvs-splat_mv) without hardware.
 
-Import this before any harness module. It puts the package and the pack on
-sys.path, selects the pack's models.json and loads its manifest.
+Import this before any harness module. It puts the repository on sys.path and selects the pack and
+family every controller-side module sees.
 """
 import os
 from pathlib import Path
+import shutil
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]          # the checkout / installed tree
-HARNESS = ROOT / "portforge_tt"                     # the flat-runnable package
-PACK = ROOT / "ports" / "parakeet"
-for path in (PACK, HARNESS):
-    if str(path) not in sys.path:
-        sys.path.insert(0, str(path))
+HARNESS = ROOT / "portforge_tt"
+PACK = ROOT / "ports" / "dav1d-rvv"
+FAMILY = "refmvs-splat_mv"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 os.environ.setdefault("PORTFORGE_REPOSITORY_ROOT", str(ROOT.parents[1]))
 
-import models  # noqa: E402
+from portforge_tt.control import port  # noqa: E402
 
-models.use_registry(PACK / "models.json")
-
-import port  # noqa: E402
-
-PORT = port.load_port(PACK)
+PORT = port.configure(PACK, FAMILY)
 
 
 class FakeFuture:
@@ -35,29 +32,19 @@ class FakeFuture:
             raise self.error
         return self.value
 
-
-def future(value):
-    """The historical 'future' placeholder used by dispatch-patching tests."""
-    return FakeFuture(value)
+    def done(self):
+        return True
 
 
-def configure_loop(loop):
-    """Load the test pack into the controller module."""
-    return loop.configure_port(PACK)
+def configure_port():
+    """Select the test pack for every controller-side module."""
+    return port.configure(PACK, FAMILY)
 
 
 def write_harness(harness):
-    """Populate a fake run harness the way the launcher freezes one."""
-    import shutil
+    """Populate a run harness the way the launcher freezes one."""
     harness = Path(harness)
-    harness.mkdir(parents=True, exist_ok=True)
-    for path in HARNESS.glob("*.py"):
-        shutil.copyfile(path, harness / path.name)
-    agents = harness / "agents"
-    agents.mkdir(exist_ok=True)
-    for path in (HARNESS / "agents").glob("*.py"):
-        shutil.copyfile(path, agents / path.name)
-    for folder in ("prompts", "guides"):
-        shutil.copytree(HARNESS / folder, harness / folder, dirs_exist_ok=True)
-    port.freeze(PORT, harness)
+    if harness.exists():
+        shutil.rmtree(harness)
+    port.freeze_harness(harness)
     return harness

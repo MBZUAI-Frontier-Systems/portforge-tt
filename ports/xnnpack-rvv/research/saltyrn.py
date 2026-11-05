@@ -4,7 +4,7 @@ The registry (saltyrn_kernels.json, next to this file) records, per kernel, the
 upstream Neon ukernel SALTyRN translated (found by content match against
 SALTyRN's pinned XNNPACK), its registry .inc, and the optimized RVV file, plus
 what the 2026-10-18 survey found (see ../README.md). The generic helpers it
-once carried (bench comparison, name mangling) live in portforge_tt.cpu.xnnpack.
+once carried (bench comparison, name mangling) live in portforge_tt.remote.xnnpack.
 
 Run from the repo root:  python ports/xnnpack-rvv/research/saltyrn.py ...
 """
@@ -16,7 +16,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from portforge_tt.cpu import xnnpack  # noqa: E402
+from portforge_tt.remote import xnnpack  # noqa: E402
 
 REGISTRY = Path(__file__).resolve().parent / "saltyrn_kernels.json"
 SUFFIX = "rvv_saltyrn"

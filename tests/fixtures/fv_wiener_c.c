@@ -1,4 +1,4 @@
-/* Test fixture for portforge_tt/fv: dav1d's own C wiener filter compiled for
+/* Test fixture for portforge_tt/verify/cbmc: dav1d's own C wiener filter compiled for
  * RV64GCV (GCC auto-vectorizes it), lifted and proved equal to its source. */
 #define BITDEPTH 8
 #include "src/looprestoration_tmpl.c"

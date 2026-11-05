@@ -1,65 +1,45 @@
-# CONTRACT: dav1d RVV kernel ports
+# CONTRACT: dav1d RVV kernels
 
-Read fully before writing assembly. dav1d is a different machine from XNNPACK:
-hand-written assembly (not intrinsics), meson (not CMake), checkasm (not
-gtest), and a stricter correctness contract - **assembly is bit-exact to the C
-reference, no tolerances**.
+dav1d's contract is strict: the assembly is **bit-exact with the C reference, no tolerance**. A
+candidate is one assembly file (`kernel.S`) that implements every function named in SPEC.md. The
+harness owns everything else: the init wiring that points dav1d's function table at your symbols,
+the C side, meson, checkasm and the board.
+
+## Rules (the gates enforce all of them)
+
+1. **Bit-exact everywhere.** checkasm (dav1d's own test: random inputs, sizes and edge flags against
+   the C reference) passes under QEMU at VLEN 128, 256, 512 and 1024 AND on the X280 itself. Held-out
+   checkasm seeds and the formal check run at certification.
+2. **Complete and self-contained.** Implement every function in SPEC.md completely in your file. No
+   calls or jumps to anything outside it (no C fallback, no libc, no other dav1d asm): the gate rejects
+   any call, tail call or jump to a symbol you do not define.
+3. **dav1d's conventions.** Use the project's asm macros (`function`/`endfunc` from `src/riscv/asm.S`,
+   see context/riscv_asm.S and the example in context/) and the RISC-V psABI (callee-saved s0-s11 and
+   fs0-fs11; 16-byte stack alignment). The X280 executes rv64gcv with Zba and Zbb, not Zbs.
+4. **Vector work.** The hot loops must be vector code; a scalar port is rejected. Never read or write
+   outside the buffers the C reference touches (checkasm guards the destination).
+5. **Tails by `vl`.** Handle widths with `vsetvli` on the remaining count, never a scalar epilogue,
+   unless the C reference's semantics force it; then prove the boundary cases in NOTES.md.
+
+## Gates
+
+| gate | what | where |
+|---|---|---|
+| G0 | builds; defines every symbol, references nothing outside the file; static profile | x86 host |
+| G1 | checkasm for the family at VLEN 128/256/512/1024 | QEMU |
+| G2 | 8 more checkasm seeds at VLEN 128 and 1024 | QEMU |
+| G3/G4 | checkasm on the X280, then `checkasm --bench` rounds pairing your kernel with the C reference in the same process | X280 |
+| G5 | held-out seeds at every VLEN and on the X280; the family's verify methods (CBMC over your lifted machine code against the C reference) | certification |
+
+`port_evaluate(stage="check")` runs G0-G2, `stage="perf"` runs G0-G4; G5 runs after `port_submit`.
 
 ## Deliverable
 
-Per campaign, in `kernels/<name>/`:
-
-1. The assembly: one or more files in the worktree's `src/riscv/64/`, functions
-   named `<function>_<8bpc|16bpc>_rvv`, using the tree's `asm.S` macros
-   (`function name, export=1, ext="v,zbb"` style; note existing riscv asm
-   requires Zbb - confirm what the X280 executes before relying on an ext).
-2. Init wiring: one assignment line per function in `src/riscv/<dsp>.h`'s
-   inline init (e.g. `c->lf.loop_v = dav1d_loop_filter_v_8bpc_rvv;`) inside the
-   right bitdepth/feature guard.
-3. `REPORT.md`: the algorithm derivation from the C reference, the register
-   allocation and lane-layout reasoning, gate receipts in run order (with the
-   checkasm seeds used), benchmark table, and honest negatives.
-
-## Gates (run them yourself, in this order)
-
-1. **checkasm correctness** - `dav1d.build` then `dav1d.run_checkasm`:
-   the family's tests green under QEMU at VLEN 128, 256, 512, 1024 and natively
-   on the X280 (when up). checkasm compares bit-exactly against the C
-   reference over randomized cases (alignments, widths, edge sizes). Run the
-   WHOLE suite too - a new function must not break another (shared temporaries
-   happen).
-2. **Targeted differential** - checkasm's random cases do not cover every
-   boundary. Write a small driver (pattern: ports/xnnpack-rvv/kernels/*/
-   difftest.c) for the ported function's corners: minimum/maximum dimensions,
-   alignment edges, the sign/rounding boundaries of any shifts, and - if the
-   function is bitdepth-templated - both bitdepths.
-3. **Benchmark** - `checkasm --bench -f <pattern>` on the X280 (its timing
-   source is linux-perf, which works under tt-bh-linux) vs the C reference and
-   vs any existing RVV implementation. Report cycles per call at the seeds you
-   used, plus - for memory-heavy functions - the working-set effect. QEMU
-   timings are NOT evidence of speed.
-4. **Review pass** - as a dav1d maintainer would: naming, macro usage, no
-   dead code, comments explaining the lane layout and the tail handling, and
-   the upstream MR shape (asm file + init line + meson wiring if needed).
+`kernel.S`, `TRANSFORMS.json` (parent, applied technique ids, novel ideas) and `NOTES.md`: the
+derivation from the C reference, the lane layout and register allocation, how each edge case and
+tail is handled, and every narrowing's range argument. A reviewer reads NOTES.md first.
 
 ## Honesty rules
 
-- The C reference and checkasm are the trusted side. Never patch them to make
-  a failure disappear (the disposable worktree may need *build* wiring like
-  params-guard widening - that is allowed and must be recorded as the
-  upstream-PR library diff).
-- Record every checkasm seed. Failures are kept verbatim in REPORT.md.
-- QEMU passing does not prove hardware correctness and vice versa (campaign 1
-  exists precisely because of this). A port is done when BOTH agree.
-- If hardware is wedged (connection refused), reboot it with
-  `x280.boot(cfg)` - that is a supported recovery, not a workaround.
-
-## Assembly-specific rules
-
-- Follow the neighboring .S files' conventions exactly (macro usage, register
-  preservation, stack usage, `.balign`).
-- Say which vector extensions you rely on (`ext=` in the function macro) and
-  confirm they exist on the X280 (`/proc/cpuinfo` isa string) AND under QEMU.
-- The tail is handled by `vl` (setvl with the remaining count), never by a
-  scalar epilogue, unless the C reference's semantics force it - and then it
-  must be proven for the boundary cases.
+- The C reference, checkasm and the gates are the trusted side; you cannot change them.
+- A kernel that is correct but slow is a result; a fast kernel with a loophole is not.
