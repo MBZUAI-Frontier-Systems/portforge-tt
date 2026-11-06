@@ -579,6 +579,13 @@ class OpenCodeLLM(LLMCallBase):
         env = dict(os.environ)
         env["OPENCODE_CONFIG"] = cfg_path
         env["OPENCODE_DISABLE_PROJECT_CONFIG"] = "1"
+        if self.work_dir:
+            # opencode takes its working directory from PWD, not from the subprocess
+            # cwd. An inherited PWD (the launching shell's) makes opencode treat the
+            # launch directory, possibly the controller repository, as its project,
+            # which puts that tree inside the permission boundary. Set it to the
+            # workspace's physical path, which is what getcwd() reports.
+            env["PWD"] = os.path.realpath(self.work_dir)
 
         run_cmd = self._build_run_cmd(user_message)
         self.logger.info("Running: %s ...", " ".join(run_cmd[:6]))

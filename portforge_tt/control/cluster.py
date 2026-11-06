@@ -21,9 +21,9 @@ import time
 import yaml
 
 if __package__:  # installed as part of the portforge_tt package
-    from ..remote.runner import safe_file, write_json
+    from ..remote.runner import safe_file, tree_policy, write_json
 else:  # flat: a frozen run harness or a direct script execution
-    from runner import safe_file, write_json
+    from runner import safe_file, tree_policy, write_json
 
 
 def identity(value):
@@ -102,6 +102,8 @@ def load(path):
                 if (not isinstance(location, str) or not Path(location).is_absolute()
                         or '..' in Path(location).parts or '\n' in location):
                     raise ValueError('checkpoint paths must be absolute without traversal')
+        if role == 'tt':
+            tree_policy(options)  # hidden_paths, reexposed_paths, audit_pattern, audit_allowlist
         endpoints[role] = dict(options, host=host, user=user,
             key=str(Path(key).expanduser()), proxy=proxy,
             resources=node.get('resources') or {})

@@ -203,7 +203,7 @@ def frozen_environment(run, manifest):
 
 
 def agent_environment(manifest):
-    """Role backend/model selection recorded in the manifest (opencode for older runs)."""
+    """Role backend/model selection and worker web setting recorded in the manifest (defaults for older runs)."""
     backends = manifest.get('agent_backends', {})
     models = manifest.get('agent_models', {})
     environment = {}
@@ -211,6 +211,7 @@ def agent_environment(manifest):
         environment['PORTFORGE_' + role.upper() + '_BACKEND'] = backends.get(role, 'opencode')
         if models.get(role):
             environment['PORTFORGE_' + role.upper() + '_MODEL'] = models[role]
+    environment['PORTFORGE_WORKER_WEB'] = manifest.get('worker_web', 'on')
     return environment
 
 

@@ -23,7 +23,7 @@ def pinned_corpus_hash(pack):
 
 class PortPackTests(unittest.TestCase):
     def test_every_pack_loads_and_freezes(self):
-        self.assertEqual({path.name for path in REAL}, {"chronos2", "esm2", "nllb", "parakeet", "pocket_tts"})
+        self.assertEqual({path.name for path in REAL}, {"chronos2", "esm2", "nllb", "parakeet", "pocket_tts", "resnet50"})
         for pack in PACKS:
             with self.subTest(pack=pack.name), tempfile.TemporaryDirectory() as directory:
                 loaded = port.load_port(pack)

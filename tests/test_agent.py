@@ -69,16 +69,42 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(permission[key], "deny", key)
         self.assertEqual(permission["webfetch"], "allow")
         self.assertEqual(permission["websearch"], "allow")
-        external = permission["external_directory"]
-        self.assertEqual(next(iter(external)), "*")  # broad allow first, denies last
-        for denied in ("~/.ssh/**", "~/.config/opencode/**", "~/.local/share/opencode/**",
-                       "/workspace/original-repository/**"):
-            self.assertEqual(external[denied], "deny", denied)
+        # Deny-by-default: every absolute or ../ path outside the workspace (home, SSH,
+        # credentials, the repository, a TT-Metal checkout) is refused.
+        self.assertEqual(permission["external_directory"], {"*": "deny"})
         self.assertEqual(config["mcp"]["parakeet_tools"],
                          {"type": "remote", "url": "http://127.0.0.1:8000/parakeet_tools/mcp",
                           "enabled": True})
         self.assertEqual(config["share"], "disabled")
         self.assertEqual(config["autoupdate"], False)
+
+    def test_external_directory_allows_only_the_workspace_and_never_asks(self):
+        # `opencode run --auto` approves every permission not explicitly denied, so an
+        # "ask" anywhere, or an "allow" for a path outside the workspace, opens it.
+        work = '/tmp/portforge-workspace'
+        for web in (True, False):
+            with self.subTest(web=web):
+                external = make_agent(web=web, work_dir=work)._build_config([])["permission"]["external_directory"]
+                self.assertEqual(external, {"*": "deny", work + "/**": "allow",
+                                            os.path.realpath(work) + "/**": "allow"})
+                self.assertNotIn("ask", external.values())
+
+    def test_workspace_is_the_opencode_working_directory(self):
+        # The external policy relies on the workspace being opencode's own working directory:
+        # the subprocess cwd AND PWD, which opencode reads for its project. An inherited PWD
+        # (the launching shell's, possibly the repository) must never survive into the run.
+        stdout = json.dumps({"type": "text", "sessionID": "ses_test1",
+                             "part": {"type": "text", "text": "ok", "sessionID": "ses_test1"}}) + "\n"
+        with tempfile.TemporaryDirectory() as root, \
+             patch.dict(os.environ, {"PWD": "/srv/launch-dir"}), \
+             patch.object(agent.IsolatedOpenCode, "_capture",
+                          return_value=SimpleNamespace(returncode=0, stdout=stdout, stderr="")) as capture:
+            agent.IsolatedOpenCode(model=agent.MODEL, agent_name='portforge-worker', web=False,
+                                   repository=Path('/workspace/original-repository'),
+                                   dangerously_skip_permissions=False, cli_major_version=2,
+                                   work_dir=root)._run_opencode("task", [])
+        self.assertEqual(capture.call_args.kwargs["cwd"], root)
+        self.assertEqual(capture.call_args.args[1]["PWD"], os.path.realpath(root))
 
     def test_supervisor_variant_denies_web_and_keeps_scoped_tools(self):
         config = make_agent(web=False)._build_config([])
@@ -359,6 +385,70 @@ def make_claude(root, web=True, repository='/workspace/original-repository', **k
 
 def stream(*events):
     return ''.join(json.dumps(event) + '\n' for event in events)
+
+
+class WorkerWebTests(unittest.TestCase):
+    """The persisted worker web setting reaches worker queries and backends; the supervisor never gets web."""
+
+    def setUp(self):
+        self.environment = patch.dict(os.environ, {'PORTFORGE_REPOSITORY_ROOT': '/workspace/original-repository'})
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+        os.environ.pop('PORTFORGE_WORKER_WEB', None)  # the default, whatever the shell exports
+
+    def test_setting_defaults_on_and_rejects_unknown_values(self):
+        self.assertTrue(agent.worker_web_enabled())
+        with patch.dict(os.environ, {'PORTFORGE_WORKER_WEB': 'off'}):
+            self.assertFalse(agent.worker_web_enabled())
+        with patch.dict(os.environ, {'PORTFORGE_WORKER_WEB': 'maybe'}), self.assertRaises(ValueError):
+            agent.worker_web_enabled()
+
+    def test_worker_queries_carry_the_setting_and_supervisor_never_gets_web(self):
+        decision = {'success': True, 'response': '{"action":"pause","instruction":"hold"}', 'error': ''}
+        for setting, expected in (('on', True), ('off', False)):
+            with self.subTest(setting=setting), tempfile.TemporaryDirectory() as root, \
+                 patch.dict(os.environ, {'PORTFORGE_WORKER_WEB': setting}), \
+                 patch.object(agent, 'read_prompt', return_value=''), patch.object(agent, 'campaign_port'), \
+                 patch.object(agent, 'query', return_value=decision) as query:
+                agent.worker_node._original(root, root, [], 2, 'resume')
+                self.assertIs(query.call_args.args[6], expected)
+                agent.supervisor_node._original(root, root, 1, {})
+                self.assertIs(query.call_args.args[6], False)
+
+    def test_worker_claude_run_loses_web_tools_when_switched_off(self):
+        output = stream({'type': 'result', 'result': 'unit complete'})
+        for setting in ('on', 'off'):
+            with self.subTest(setting=setting), tempfile.TemporaryDirectory() as root, \
+                 patch.dict(os.environ, {'PORTFORGE_WORKER_BACKEND': 'claude', 'PORTFORGE_WORKER_MODEL': 'claude-test',
+                                         'PORTFORGE_WORKER_WEB': setting}), \
+                 patch.object(agent, 'read_prompt', return_value=''), patch.object(agent, 'campaign_port'), \
+                 patch.object(agent.subprocess, 'run',
+                              return_value=SimpleNamespace(stdout=output, stderr='', returncode=0)) as run:
+                agent.worker_node._original(root, root, [], 1, 'task')
+                command = run.call_args.args[0]
+                on = setting == 'on'
+                self.assertEqual(command[command.index('--tools') + 1],
+                                 'Read,Grep,Glob,WebFetch,WebSearch' if on else 'Read,Grep,Glob')
+                allowed = json.loads(command[command.index('--settings') + 1])['permissions']['allow']
+                self.assertEqual(('WebFetch' in allowed, 'WebSearch' in allowed), (on, on))
+                self.assertIn('--restricted', command)  # file tools confined to the workspace (cwd)
+                self.assertEqual(run.call_args.kwargs['cwd'], root)
+
+    def test_worker_opencode_run_denies_web_permissions_when_switched_off(self):
+        for setting, expected in (('on', 'allow'), ('off', 'deny')):
+            seen = {}
+
+            def prompt(instance, message, tools=None):
+                seen['permission'] = instance._build_config(tools or [])['permission']
+                return SimpleNamespace(success=True, result='ok', stderr='')
+
+            with self.subTest(setting=setting), tempfile.TemporaryDirectory() as root, \
+                 patch.dict(os.environ, {'PORTFORGE_WORKER_BACKEND': 'opencode', 'PORTFORGE_WORKER_WEB': setting}), \
+                 patch.object(agent, 'read_prompt', return_value=''), patch.object(agent, 'campaign_port'), \
+                 patch.object(agent.IsolatedOpenCode, 'prompt', autospec=True, side_effect=prompt):
+                agent.worker_node._original(root, root, [], 1, 'task')
+                self.assertEqual((seen['permission']['webfetch'], seen['permission']['websearch']),
+                                 (expected, expected))
 
 
 class ClaudeBackendTests(unittest.TestCase):

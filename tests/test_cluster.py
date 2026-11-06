@@ -70,6 +70,33 @@ class ClusterTests(unittest.TestCase):
         self.assertEqual(args[args.index('-l') + 1], 'gpu-user')
         self.assertEqual(run.call_args.kwargs['input'], b'data')
 
+    def test_hiding_keys_are_optional_and_part_of_endpoint_identity(self):
+        plain = self.load()['tt']
+        for key in ('hidden_paths', 'reexposed_paths', 'audit_pattern', 'audit_allowlist'):
+            self.assertNotIn(key, plain)
+        raw = copy.deepcopy(self.raw)
+        raw['porting']['tt'].update(hidden_paths=['models'], reexposed_paths=['models/common'],
+                                    audit_pattern='resnet', audit_allowlist=['models/common/util.py'])
+        hidden = self.load(raw)['tt']
+        self.assertEqual(hidden['hidden_paths'], ['models'])
+        self.assertEqual(hidden['audit_allowlist'], ['models/common/util.py'])
+        self.assertNotEqual(cluster.identity(plain), cluster.identity(hidden))
+
+    def test_hiding_inventory_rejects_unsafe_or_unanchored_values(self):
+        invalid = [{'hidden_paths': None}, {'hidden_paths': '/models'}, {'hidden_paths': ['/models']},
+                   {'hidden_paths': ['models/../tests']}, {'hidden_paths': ['./models']}, {'hidden_paths': ['']},
+                   {'hidden_paths': ['models\n']}, {'hidden_paths': ['models'], 'reexposed_paths': ['tests/keep.py']},
+                   {'hidden_paths': ['models'], 'reexposed_paths': ['models']},
+                   {'hidden_paths': ['models'], 'audit_pattern': 7}, {'audit_allowlist': ['/abs']}]
+        for keys in invalid:
+            raw = copy.deepcopy(self.raw)
+            raw['porting']['tt'].update(keys)
+            with self.subTest(keys=keys), self.assertRaises(ValueError):
+                self.load(raw)
+        raw = copy.deepcopy(self.raw)
+        raw['porting']['tt'].update(hidden_paths=['tests', 'tests/unit/keep.py'], reexposed_paths=['tests/unit'])
+        self.assertEqual(self.load(raw)['tt']['reexposed_paths'], ['tests/unit'])
+
     def test_model_checkpoint_inventory_is_explicit_and_validated(self):
         raw = copy.deepcopy(self.raw)
         raw['porting']['tt']['weights_by_model'] = {'parakeet': '/models/parakeet'}

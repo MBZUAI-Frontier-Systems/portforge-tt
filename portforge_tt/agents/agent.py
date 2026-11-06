@@ -102,13 +102,18 @@ class IsolatedOpenCode(OpenCodeLLM):
 
     def _build_config(self, tools):
         config = super()._build_config(tools)
-        # Rule order matters: the LAST matching pattern wins, so the broad
-        # allow comes first and the specific denies come after it.
-        external = {"*": "allow",
-                    "~/.ssh/**": "deny",
-                    "~/.config/opencode/**": "deny",
-                    "~/.local/share/opencode/**": "deny",
-                    str(self.repository) + "/**": "deny"}
+        # Deny-by-default for every path outside the campaign workspace: absolute
+        # and ../ paths to the rest of the host (home, SSH keys, opencode
+        # credentials, the controller repository, any TT-Metal checkout) are
+        # refused. The workspace is re-allowed in both its given and physical
+        # spellings (macOS /var is a symlink to /private/var); rules after "*"
+        # win. Never use "ask" here: the run passes --auto, which approves
+        # anything not explicitly denied.
+        external = {"*": "deny"}
+        work_dir = getattr(self, "work_dir", None)  # absent only on bare test instances: deny-only
+        if work_dir:
+            for root in dict.fromkeys((str(work_dir), os.path.realpath(work_dir))):
+                external[root + "/**"] = "allow"
         config["permission"] = {
             "edit": "deny", "bash": "deny", "task": "deny", "question": "deny",
             "webfetch": "allow" if self.web else "deny",
@@ -219,6 +224,15 @@ def role_selection(role):
         raise ValueError(f"unknown agent backend {backend!r}; choose {', '.join(BACKENDS)}")
     legacy = os.environ.get("PORTFORGE_AGENT_MODEL") if backend == "opencode" else None
     return backend, os.environ.get(f"PORTFORGE_{key}_MODEL") or legacy or DEFAULT_MODELS[backend]
+
+
+def worker_web_enabled():
+    """Worker web access (WebFetch/WebSearch) recorded for this run; on unless archived off.
+    The supervisor never has web access."""
+    value = os.environ.get("PORTFORGE_WORKER_WEB", "on")
+    if value not in ("on", "off"):
+        raise ValueError(f"unknown worker web setting {value!r}; choose on or off")
+    return value == "on"
 
 
 def error_kind(value):
@@ -335,7 +349,7 @@ def worker_node(workspace, run_dir, tools, turn, prompt):
     instructions = read_prompt("worker", campaign_port(run_dir)) + "\n\n"
     return save(run_dir, "worker", turn,
                 query(workspace, run_dir, "worker", turn, instructions + prompt + WORKER_HANDOFF,
-                      tools, True, WORKER_TIMEOUT_SECONDS))
+                      tools, worker_web_enabled(), WORKER_TIMEOUT_SECONDS))
 
 
 @job(resources={"agent_creds": 1})

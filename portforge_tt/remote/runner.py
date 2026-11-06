@@ -30,6 +30,7 @@ else:  # flat: runs as harness/runner.py on the TT host
 
 METAL = PYTHON = HEALTH = LEASES = None
 MOUNTS, CARD_ALLOWLIST = (), ()
+HIDDEN_PATHS, REEXPOSED_PATHS, AUDIT_PATTERN, AUDIT_ALLOWLIST = (), (), '', ()
 WEIGHTS_BY_MODEL = {}
 HOST_MEMORY_LIMIT_BYTES = 64 * 1024**3
 FULL_TIMEOUT_SECONDS = 21600
@@ -59,10 +60,44 @@ def full_job_timeout(config):
     return value
 
 
+def canonical_relative(value):
+    """One path relative to the TT-Metal checkout, with no absolute, empty, '.' or '..' parts."""
+    if not isinstance(value, str) or not value or any(c in value for c in '\n\r\0'):
+        raise ValueError('tree paths must be non-empty single-line strings')
+    if value.startswith('/') or any(part in ('', '.', '..') for part in value.split('/')):
+        raise ValueError('tree paths must be relative and canonical: ' + repr(value))
+    return value
+
+
+def tree_policy(config):
+    """Validate the optional hiding and audit keys; absent keys mean no hiding and no audit.
+
+    hidden_paths are masked in the sandbox's TT-Metal views (directories become empty, files read
+    empty), reexposed_paths (strictly under a hidden path) are visible again, and the preflight fails
+    when audit_pattern (an extended regex) matches a file outside audit_allowlist in the masked view.
+    """
+    hidden, reexposed = config.get('hidden_paths', []), config.get('reexposed_paths', [])
+    allowlist, pattern = config.get('audit_allowlist', []), config.get('audit_pattern', '')
+    for name, value in (('hidden_paths', hidden), ('reexposed_paths', reexposed), ('audit_allowlist', allowlist)):
+        if not isinstance(value, list):
+            raise ValueError(name + ' must be a list of relative paths')
+    hidden = tuple(canonical_relative(path) for path in hidden)
+    reexposed = tuple(canonical_relative(path) for path in reexposed)
+    allowlist = tuple(canonical_relative(path) for path in allowlist)
+    if not isinstance(pattern, str) or any(c in pattern for c in '\n\r\0'):
+        raise ValueError('audit_pattern must be a single-line string')
+    for path in reexposed:
+        # Strictly under a hidden path: re-exposing the hidden path itself would undo the hiding.
+        if path in hidden or not any(path.startswith(parent + '/') for parent in hidden):
+            raise ValueError('reexposed path must lie strictly under a hidden path: ' + path)
+    return hidden, reexposed, pattern, allowlist
+
+
 def configure(config):
     """Load trusted host configuration; candidates never supply mounts or paths."""
     global METAL, PYTHON, HEALTH, LEASES, MOUNTS, CARD_ALLOWLIST, WEIGHTS_BY_MODEL
     global HOST_MEMORY_LIMIT_BYTES, FULL_TIMEOUT_SECONDS
+    global HIDDEN_PATHS, REEXPOSED_PATHS, AUDIT_PATTERN, AUDIT_ALLOWLIST
     memory_limit = config.get('host_memory_limit_bytes', 64 * 1024**3)
     if type(memory_limit) is not int or not 1024**3 <= memory_limit <= 128 * 1024**3:
         raise ValueError('host_memory_limit_bytes must be an integer between 1 and 128 GiB')
@@ -87,6 +122,7 @@ def configure(config):
     mounts = tuple(absolute(path) for path in mounts)
     if any(not isinstance(pci, str) or not re.fullmatch(PCI_PATTERN, pci) for pci in allowlist):
         raise ValueError('invalid PCI card address')
+    hiding = tree_policy(config)
     HOST_MEMORY_LIMIT_BYTES = memory_limit
     FULL_TIMEOUT_SECONDS = full_timeout
     METAL, PYTHON, HEALTH, LEASES = paths
@@ -95,6 +131,7 @@ def configure(config):
         (METAL / 'generated').mkdir(exist_ok=True)
     WEIGHTS_BY_MODEL = weights
     MOUNTS, CARD_ALLOWLIST = mounts, tuple(allowlist)
+    HIDDEN_PATHS, REEXPOSED_PATHS, AUDIT_PATTERN, AUDIT_ALLOWLIST = hiding
 
 
 def write_json(path, value):
@@ -191,6 +228,39 @@ def valid_profile(request):
         not case or (isinstance(case, str) and PROFILE_CASE.fullmatch(case) is not None))
 
 
+def tree_mask_args(alias):
+    """Mask HIDDEN_PATHS under one alias, re-expose REEXPOSED_PATHS, then mask hidden paths beneath them.
+
+    Phase 1 masks hidden paths outside every re-exposed path. Phase 2 binds re-exposed
+    paths shallowest first. Phase 3 masks hidden paths under a re-exposed path again,
+    because a later bind covers any mount made beneath it.
+    """
+    def mask(relative):
+        host = METAL / relative
+        if host.is_dir():
+            return ['--tmpfs', alias + '/' + relative]
+        if host.is_file():
+            # --dev-bind keeps the device node readable (empty) inside the sandbox. A read-only
+            # bind is nodev, so reads and grep fail with EACCES, and the preflight audit errors.
+            return ['--dev-bind', '/dev/null', alias + '/' + relative]
+        return []  # Absent from this checkout: nothing to hide.
+
+    def under_reexposed(relative):
+        return any(relative.startswith(parent + '/') for parent in REEXPOSED_PATHS)
+
+    args = []
+    for relative in HIDDEN_PATHS:
+        if not under_reexposed(relative):
+            args += mask(relative)
+    for relative in sorted(REEXPOSED_PATHS, key=lambda path: path.count('/')):
+        if (METAL / relative).exists():
+            args += ['--ro-bind', str(METAL / relative), alias + '/' + relative]
+    for relative in HIDDEN_PATHS:
+        if under_reexposed(relative):
+            args += mask(relative)
+    return args
+
+
 def sandbox(root, job, pcis, nodes, model, extra_env=None):
     """bwrap argv exposing exactly the leased cards (``pcis``/``nodes`` are parallel lists)."""
     weights, target = checkpoint(model)
@@ -221,6 +291,7 @@ def sandbox(root, job, pcis, nodes, model, extra_env=None):
         # representations without requiring a directory mount over a file.
         args += (['--ro-bind', '/dev/null', alias + '/.git'] if (METAL / '.git').is_file()
                  else ['--tmpfs', alias + '/.git'])
+        args += tree_mask_args(alias)  # after MOUNTS, so a runtime mount inside the checkout cannot undo it
     for path in ('/dev/hugepages', '/dev/hugepages-1G'):
         if Path(path).exists():
             args += ['--bind' if path.startswith('/dev') else '--ro-bind', path, path]
@@ -372,6 +443,31 @@ def execute(args, job, total, monitor, stage='smoke'):
             'progress': progress, 'seconds': time.monotonic() - start}
 
 
+# Appended to the preflight probe. Runs inside the sandbox view, so hidden paths are already masked.
+# argv: pattern, JSON allowlist of relative paths, checkout root. Exit 0 pass, 1 leak, 2 scan error.
+AUDIT_SCRIPT = r'''
+import json, subprocess, sys
+pattern, allowed, root = sys.argv[1], set(json.loads(sys.argv[2])), sys.argv[3]
+excluded = ['build_Release', 'build', 'python_env', '.cpmcache', '.cpm-cache', 'generated', '.git', 'third_party', '_deps']
+# A worktree's .git is a pointer file masked as a nodev device, so grep must skip it by name.
+found = subprocess.run(['grep', '-rIilE', '-e', pattern, '--exclude=.git'] + ['--exclude-dir=' + name for name in excluded] + [root],
+                       capture_output=True, text=True, errors='replace')
+if found.returncode not in (0, 1):
+    print('AUDIT_ERROR grep exited', found.returncode, found.stderr.strip()[-500:])
+    sys.exit(2)
+hits = sorted(line[len(root) + 1:] if line.startswith(root + '/') else line for line in found.stdout.splitlines())
+leaks = [hit for hit in hits if hit not in allowed]
+for hit in leaks[:100]:
+    print('AUDIT_LEAK', hit)
+if len(leaks) > 100:
+    print('AUDIT_LEAK ...', len(leaks) - 100, 'more')
+if leaks:
+    print('AUDIT_FAILED', len(leaks), 'unlisted hits')
+    sys.exit(1)
+print('AUDIT_OK', len(hits))
+'''
+
+
 def main(root, request):
     root = Path(root).resolve()
     if request['kind'] == 'log':
@@ -438,14 +534,21 @@ def main(root, request):
                    '--output', '/output', '--weights', weight_target, '--precision', precision]
         total = 1800
     elif request['kind'] == 'preflight':
-        command = [str(PYTHON), '-c', "import os,torch,ttnn; "
+        # Hiding changes what the sandbox can import, so the probe also checks ttnn's package layout.
+        decorators = 'import ttnn.decorators; ' if (HIDDEN_PATHS or AUDIT_PATTERN) else ''
+        probe = ("import os,torch,ttnn; " + decorators +
             f"assert not os.path.exists({str(Path.home() / '.ssh')!r}); "
             f"assert not os.path.exists({str(root / 'references')!r}); "
             "d=ttnn.open_device(device_id=0); "
             "x=ttnn.from_torch(torch.ones(1,1,32,32),device=d,layout=ttnn.TILE_LAYOUT); "
             "assert torch.equal(ttnn.to_torch(ttnn.add(x,x)),torch.full((1,1,32,32),2.)); "
-            "ttnn.close_device(d); print('ISOLATION_DEVICE_OK')"]
+            "ttnn.close_device(d); print('ISOLATION_DEVICE_OK')")
+        command = [str(PYTHON), '-c', probe]
         total = 300  # cold JIT cache: opening a card and compiling one kernel took ~100 s
+        if AUDIT_PATTERN:  # the leak audit greps the masked checkout after the device probe
+            command = [str(PYTHON), '-c', probe + '\n' + AUDIT_SCRIPT,
+                       AUDIT_PATTERN, json.dumps(list(AUDIT_ALLOWLIST)), '/opt/tt-metal']
+            total = 480
     else:
         command = ['/bin/bash', '--noprofile', '--norc', '-c', request['command']]
         total = min(max(int(request.get('timeout', 120)), 1), 300)
@@ -527,6 +630,10 @@ def main(root, request):
                 and (result.get('progress') or {}).get('phase') == 'complete'):
             # The candidate finished; Tracy's post-processing failed (e.g. dropped device markers).
             result['failure'] = 'profiler_error'
+        # A failed audit is a configuration fault, not a device fault: name it, and keep the card quarantined.
+        if (request['kind'] == 'preflight' and result['returncode'] and result['failure'] in ('candidate_error', 'device_initialization')
+                and any(marker in result['stdout'] for marker in ('AUDIT_LEAK', 'AUDIT_FAILED', 'AUDIT_ERROR'))):
+            result['failure'] = 'audit_leak'
         hashing_timeout = result['failure'] == 'timeout' and (result.get('progress') or {}).get('phase') == 'verify_checkpoint'
         if not hashing_timeout and (result['failure'] in ('timeout', 'device_initialization', 'host_memory_limit')
                                     or (request['kind'] == 'preflight' and result['returncode'])):

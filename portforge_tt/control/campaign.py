@@ -7,6 +7,9 @@ workspace (pack docs plus shared guides, and the pack's ``seed/`` source if it h
 the exact evaluator it was graded by. ``resume=<earlier run>`` continues an earlier campaign in a
 new run: its full workspace and STATE.md, its FP32 references and read-only job history, plus an
 optional trusted ``resume_note`` to both agents. Neither agent receives an earlier private port.
+The worker's web access (WebFetch/WebSearch) is an experimental factor: ``worker_web='off'`` removes
+it for the campaign (default on; the supervisor never has it). A resumed run keeps its earlier setting
+unless one is given.
 """
 from datetime import datetime, timezone
 import json
@@ -124,7 +127,21 @@ def seed_workspace(workspace, seed_run, model, seed_job=None):
 
 
 
-def resume_workspace(workspace, previous_run, model, backends, note=''):
+def resolve_worker_web(flag, resume_run=None):
+    """Worker web setting for a new run: an explicit flag wins, a resumed run keeps its archived one, else on.
+
+    Runs archived before the flag existed had web access on.
+    """
+    if flag is not None:
+        if flag not in ('on', 'off'):
+            raise ValueError('worker_web must be on or off')
+        return flag
+    if resume_run is None:
+        return 'on'
+    return json.loads((Path(resume_run) / 'manifest.json').read_text()).get('worker_web', 'on')
+
+
+def resume_workspace(workspace, previous_run, model, backends, note='', web='on'):
     """Carry an earlier campaign's complete workspace, including STATE.md, into a new run.
 
     Unlike seed_workspace this keeps every note, because the campaign continues. Job
@@ -153,9 +170,11 @@ def resume_workspace(workspace, previous_run, model, backends, note=''):
         target.write_text(content)
     previous = '/'.join(manifest.get('agent_backends', {}).get(role, 'opencode')
                         for role in ('worker', 'supervisor'))
+    previous_web = manifest.get('worker_web', 'on')
     header = ('# Resumed campaign\n\n'
         'This run continues ' + root.name + ' in a new archive (agents: ' + previous + ' -> '
-        + backends['worker'] + '/' + backends['supervisor'] + ', worker/supervisor). Source, notes '
+        + backends['worker'] + '/' + backends['supervisor'] + ', worker/supervisor). Worker web access '
+        '(WebFetch/WebSearch): ' + web + ' (earlier run: ' + previous_web + '). Source, notes '
         'and the STATE below are carried unchanged. Job IDs recorded below belong to earlier runs: '
         'port_status(job_id=...) and port_log still read them as historical receipts, but no '
         'pass, pending job or baseline acceptance is inherited. Re-establish gates in this run and '
@@ -169,7 +188,7 @@ def resume_workspace(workspace, previous_run, model, backends, note=''):
 
 def start(port, cluster=None, *, hours=6, detach=True, corpus=None, model=None, run_dir=None,
           agent='opencode', agent_model=None, supervisor_agent=None, supervisor_model=None,
-          optimize=None, constraint=(), scenario=None, beam=None,
+          optimize=None, constraint=(), scenario=None, beam=None, worker_web=None,
           resume=None, resume_note='', seed_run=None, seed_job=None, reference_run=None):
     """Launch a campaign for the pack at ``port``; raises ValueError on a bad selection.
 
@@ -180,6 +199,7 @@ def start(port, cluster=None, *, hours=6, detach=True, corpus=None, model=None, 
     agent / supervisor_agent: opencode, claude or codex, with optional model overrides.
     optimize / constraint / scenario: objective after the gates (see objective.py; default Pareto).
     beam: parallel search width (default: TT cards in the cluster).
+    worker_web: 'on' or 'off' (default on; a resume keeps the earlier run's setting).
     resume / resume_note: continue an earlier run. seed_run / seed_job: start from an earlier fresh
     run's workspace (or one of its passing bringup snapshots). reference_run: reuse its FP32 references.
     """
@@ -205,7 +225,12 @@ def start(port, cluster=None, *, hours=6, detach=True, corpus=None, model=None, 
         raise ValueError('resume and seed_run are exclusive')
     if resume_note and not resume:
         raise ValueError('resume_note requires resume')
+    worker_web = resolve_worker_web(worker_web, resume)
     supervisor_agent = supervisor_agent or agent
+    if worker_web == 'off' and 'codex' in (agent, supervisor_agent):
+        # codex's read-only sandbox may read the whole controller host (e.g. a TT-Metal checkout);
+        # the claude (--restricted) and opencode (external_directory deny) wrappers confine reads to the workspace.
+        raise ValueError('worker_web off needs claude or opencode agents: codex can read outside the workspace')
     agents = {'worker': {'backend': agent, 'model': agent_model or DEFAULT_MODELS[agent]},
               'supervisor': {'backend': supervisor_agent, 'model': supervisor_model or
                              (agent_model if supervisor_agent == agent and agent_model
@@ -233,6 +258,7 @@ def start(port, cluster=None, *, hours=6, detach=True, corpus=None, model=None, 
         for value in constraint:
             command += ['--constraint', value]
         command += ['--agent', agents['worker']['backend'], '--agent-model', agents['worker']['model'],
+                    '--worker-web', worker_web,
                     '--supervisor-agent', agents['supervisor']['backend'],
                     '--supervisor-model', agents['supervisor']['model']]
         with run.with_suffix('.log').open('wb') as log:
@@ -271,7 +297,8 @@ def start(port, cluster=None, *, hours=6, detach=True, corpus=None, model=None, 
                   else {} if resume else seed_pack_source(workspace))
     if resume:
         provenance = resume_workspace(workspace, resume, model,
-                                      {role: agents[role]['backend'] for role in agents}, resume_note)
+                                      {role: agents[role]['backend'] for role in agents}, resume_note,
+                                      web=worker_web)
         if not reference_run and complete_references(resume.resolve(), model) and same_evaluator(resume.resolve()):
             reference_run = resume
     freeze_harness(run / 'harness')
@@ -283,6 +310,7 @@ def start(port, cluster=None, *, hours=6, detach=True, corpus=None, model=None, 
                 'seed_policy': seed_policy(),
                 'agent_backends': {role: agents[role]['backend'] for role in agents},
                 'agent_models': {role: agents[role]['model'] for role in agents},
+                'worker_web': worker_web,
                 'operator_note': resume_note.strip(),
                 'optimization': optimization, 'beam': beam,
                 'reference_run': str(reference_run.resolve()) if reference_run else None, **provenance}

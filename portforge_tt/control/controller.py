@@ -232,6 +232,11 @@ def capacity_wait(record, retries, deadline):
 
 
 
+def preflight_timeout(endpoint):
+    """The runner's preflight deadline plus slack; the leak audit (audit_pattern) greps the checkout."""
+    return 510 if endpoint.get('audit_pattern') else 330
+
+
 def prepare(run, config):
     """Verify a replacement before activating it; never reset a machine."""
     endpoint = config['tt']
@@ -262,7 +267,7 @@ def prepare(run, config):
     for card in found:
         job = 'preflight-' + uuid.uuid4().hex
         result = cluster.remote(config, run, {'kind': 'preflight', 'job': job, 'pci': card['pci'],
-                                      'model': next(iter(weights))}, timeout=330)
+                                      'model': next(iter(weights))}, timeout=preflight_timeout(endpoint))
         write_json(Path(run) / 'preflights' / (job + '.json'), result)
     health = cluster.remote(config, run, {'kind': 'health'})
     if not any(c['state'] == 'healthy' for c in health['cards']):
@@ -328,7 +333,7 @@ def recover_timed_out_card(run, config, health, model):
                 json.dump(record, stream, indent=2)
         except FileExistsError:
             continue
-        checked = cluster.remote(config, str(run), probe, timeout=330)
+        checked = cluster.remote(config, str(run), probe, timeout=preflight_timeout(config['tt']))
         write_json(run / 'preflights' / (probe['job'] + '.json'), checked)
         write_json(receipt, {**record, 'state': 'complete', 'result': checked})
         # The runner owns card state; success is established by its actual probe.
@@ -369,7 +374,7 @@ def loop(args):
     os.environ.setdefault('PYTHONPATH', str(run / 'harness'))
     runtime.trace(str(run / 'trace'))
     runtime.event('campaign.start', model=model, run=str(run), hours=args.hours,
-                  backends=manifest.get('agent_backends', {}))
+                  backends=manifest.get('agent_backends', {}), worker_web=manifest.get('worker_web', 'on'))
     tools = None
     try:
         health = prepare(run, config)
@@ -503,6 +508,9 @@ def main(argv=None):
     parser.add_argument('--resume-note', default='', help='Operator note prepended to the resumed STATE.md')
     parser.add_argument('--agent', choices=BACKENDS, default='opencode', help='Worker agent CLI')
     parser.add_argument('--agent-model', help='Worker model (default depends on --agent)')
+    parser.add_argument('--worker-web', choices=('on', 'off'), default=None,
+                        help='Worker web access (WebFetch/WebSearch): on or off. Default on; --resume '
+                             'inherits the earlier run unless this is given')
     parser.add_argument('--supervisor-agent', choices=BACKENDS, help='Supervisor agent CLI (default: --agent)')
     parser.add_argument('--supervisor-model', help='Supervisor model (default depends on its agent)')
     parser.add_argument('--optimize', help='Primary metric to optimize after the gates (default: Pareto front): '

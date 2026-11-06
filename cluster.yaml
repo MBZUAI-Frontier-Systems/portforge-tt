@@ -49,6 +49,11 @@ porting:
     - '0000:00:00.0'
     host_memory_limit_bytes: 34359738368          # per-job host RSS limit (1-128 GiB)
     full_timeout_seconds: 21600                   # outer deadline of the frozen full evaluation
+    # Optional, all empty by default; paths are relative to `metal`:
+    # hidden_paths: [models, tests/didt, tech_reports/CNNs]  # masked from agents: dirs become empty, files read empty
+    # reexposed_paths: [models/common, models/__init__.py]  # read-only again inside a hidden path; must lie strictly under one
+    # audit_pattern: resnet                          # extended regex; the preflight fails if it matches elsewhere in the checkout
+    # audit_allowlist: [ttnn/cpp/ttnn/operations/conv/conv2d/conv2d.cpp]  # relative files allowed to match audit_pattern
   reference:
     work_dir: /home/<reference-user>/portforge
     python: /home/<reference-user>/portforge/.venv/bin/python  # built by setup_reference.sh

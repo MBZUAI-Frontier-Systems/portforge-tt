@@ -34,3 +34,6 @@ runs/
 # pytest
 .pytest_cache/
 generated/
+
+# Private ImageNet corpus (ports/resnet50/build_corpus.py); never committed
+ports/resnet50/corpus.json

@@ -1,0 +1,52 @@
+{
+ "schema_version": 1,
+ "key": "resnet50",
+ "title": "ResNet-50",
+ "task": "ImageNet-1k image classification (1000-way logits), task-level gates against the FP32 oracle; maximize images per second on one card",
+ "delivery_models": [
+  "resnet50"
+ ],
+ "precisions": [
+  "bf16",
+  "fp32",
+  "fp16",
+  "bfp8_b"
+ ],
+ "delivery_precisions": [
+  "bf16",
+  "bfp8_b"
+ ],
+ "optimization": {
+  "scenario": "offline",
+  "constraints": [],
+  "pareto": [
+   "p50_latency",
+   "p99_latency",
+   "throughput",
+   "joules_per_item",
+   "dram_bytes",
+   "max_nrmse"
+  ]
+ },
+ "corpus": {
+  "sha256": "67c2b735c39017c2203f747d32156548dabd1fa1ef728366753f01e265c6d030",
+  "file": null
+ },
+ "reference": {
+  "packages": [
+   "torchvision==0.29.0",
+   "safetensors",
+   "huggingface_hub",
+   "pillow",
+   "numpy==2.4.4"
+  ],
+  "imports": [
+   "torchvision",
+   "safetensors",
+   "huggingface_hub",
+   "PIL"
+  ]
+ },
+ "objective": "Deliver ONE correct, production-level TTNN implementation of ResNet-50 (timm/resnet50.tv_in1k) for one Blackhole card, as fast and lean as you can make it: the campaign ranks passing sources on a Pareto front of per-call latency (p50, p99), throughput (best images per second over the perf stage's single calls at batch 16 and 32 and its classify_stream cases), energy per image, device DRAM and NRMSE against the FP32 oracle. Push every axis; where fidelity trades against speed or memory, keep the distinct points (e.g. a high-fidelity and a fastest configuration) as separate frontier sources rather than one compromise. Write it from TTNN operations, the TTNN documentation and op unit tests in the sandbox; there are no other model ports to start from. Pass smoke and bringup, then run perf on that source: it is your measured baseline. Do not run PyTorch CPU or ONNX baselines (they load the shared TT host's CPU and corrupt timings). Profile, then optimize one hypothesis at a time against the perf frontier, at both delivery precisions. Package in tt-metal style (tt/, demo/, tests/, README with measured numbers) during the last hour, then freeze for full validation. Follow TASK.md and LESSONS.md.",
+ "precision_policy": "bf16 and bfp8_b are separate delivery modes, each ranked against its own first passing perf result. Weight and activation formats, math fidelity, fp32 accumulation and packer L1 accumulation are free choices per op group as long as every gate holds; declare them truthfully in precision_policy. BFP8_B is block floating point, not IEEE FP8."
+}

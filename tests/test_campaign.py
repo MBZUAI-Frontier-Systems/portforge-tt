@@ -219,12 +219,90 @@ class CampaignTests(RunFixture):
 
     def test_agent_environment_defaults_older_manifests_to_opencode(self):
         self.assertEqual(port.agent_environment({}), {'PORTFORGE_WORKER_BACKEND': 'opencode',
-                                                      'PORTFORGE_SUPERVISOR_BACKEND': 'opencode'})
+                                                      'PORTFORGE_SUPERVISOR_BACKEND': 'opencode',
+                                                      'PORTFORGE_WORKER_WEB': 'on'})
         manifest = {'agent_backends': {'worker': 'claude', 'supervisor': 'opencode'},
-                    'agent_models': {'worker': 'claude-opus-5-5', 'supervisor': 'zai-coding-plan/glm-5.3'}}
+                    'agent_models': {'worker': 'claude-opus-5-5', 'supervisor': 'zai-coding-plan/glm-5.3'},
+                    'worker_web': 'off'}
         self.assertEqual(port.agent_environment(manifest), {
             'PORTFORGE_WORKER_BACKEND': 'claude', 'PORTFORGE_WORKER_MODEL': 'claude-opus-5-5',
-            'PORTFORGE_SUPERVISOR_BACKEND': 'opencode', 'PORTFORGE_SUPERVISOR_MODEL': 'zai-coding-plan/glm-5.3'})
+            'PORTFORGE_SUPERVISOR_BACKEND': 'opencode', 'PORTFORGE_SUPERVISOR_MODEL': 'zai-coding-plan/glm-5.3',
+            'PORTFORGE_WORKER_WEB': 'off'})
+
+    def test_worker_web_resolves_from_flag_or_resumed_archive_only(self):
+        root = self.make_previous_run('web-off', worker_web='off')
+        self.assertEqual(campaign.resolve_worker_web(None), 'on')
+        self.assertEqual(campaign.resolve_worker_web(None, root), 'off')  # resume inherits
+        self.assertEqual(campaign.resolve_worker_web('on', root), 'on')   # explicit flag wins
+        self.assertEqual(campaign.resolve_worker_web('off'), 'off')
+        older = self.make_previous_run('pre-flag')  # archived before the flag existed: web was on
+        self.assertEqual(campaign.resolve_worker_web(None, older), 'on')
+        with self.assertRaises(ValueError):
+            campaign.resolve_worker_web('maybe')
+
+    def launch(self, run, *flags, detach=False):
+        """Run the launcher to its controller exec (fresh) or child Popen (detached), both stubbed.
+        Returns (manifest, exec environment, workspace) or the detached child command."""
+        root = Path(self.temp.name)
+        corpus, inventory = root / 'corpus.json', root / 'cluster.yaml'
+        corpus.write_text('{}')
+        inventory.write_text('')
+        argv = ['--port', str(support.PACK), '--cluster', str(inventory), '--corpus', str(corpus),
+                '--run-dir', str(root / run), *(['--detach'] if detach else []), *flags]
+        if detach:
+            with patch.object(campaign.subprocess, 'Popen', return_value=SimpleNamespace(pid=4242)) as popen, \
+                 patch('sys.stdout', io.StringIO()):
+                controller.main(argv)
+            return popen.call_args_list[0].args[0]
+        workspace = root / (run + '-workspace')
+        workspace.mkdir()
+        captured = {}
+
+        class Execed(Exception):
+            pass
+
+        def fake_exec(path, command, env):
+            captured['env'] = env
+            raise Execed
+
+        with patch.object(campaign, 'load_cluster', return_value={}), \
+             patch.object(campaign, 'digest', return_value=support.PORT['corpus_sha256']), \
+             patch.object(campaign, 'check_suites'), \
+             patch.object(campaign.tempfile, 'mkdtemp', return_value=str(workspace)), \
+             patch.object(campaign.os, 'execve', side_effect=fake_exec), patch('sys.stdout', io.StringIO()):
+            with self.assertRaises(Execed):
+                controller.main(argv)
+        manifest = json.loads((root / run / 'manifest.json').read_text())
+        return manifest, captured['env'], workspace
+
+    def test_worker_web_is_archived_applied_and_inherited_on_resume(self):
+        manifest, env, _ = self.launch('default-run')
+        self.assertEqual((manifest['worker_web'], env['PORTFORGE_WORKER_WEB']), ('on', 'on'))
+        manifest, env, _ = self.launch('off-run', '--worker-web', 'off', '--agent', 'claude')
+        self.assertEqual((manifest['worker_web'], env['PORTFORGE_WORKER_WEB']), ('off', 'off'))
+        earlier = self.make_previous_run('web-earlier', worker_web='off')
+        manifest, env, workspace = self.launch('inherit-run', '--resume', str(earlier))
+        self.assertEqual((manifest['worker_web'], env['PORTFORGE_WORKER_WEB']), ('off', 'off'))
+        self.assertIn('Worker web access (WebFetch/WebSearch): off (earlier run: off).',
+                      (workspace / 'STATE.md').read_text())
+        manifest, env, workspace = self.launch('override-run', '--resume', str(earlier), '--worker-web', 'on')
+        self.assertEqual((manifest['worker_web'], env['PORTFORGE_WORKER_WEB']), ('on', 'on'))
+        self.assertIn('Worker web access (WebFetch/WebSearch): on (earlier run: off).',
+                      (workspace / 'STATE.md').read_text())
+
+    def test_detached_child_receives_the_resolved_worker_web_setting(self):
+        earlier = self.make_previous_run('web-detached-earlier', worker_web='off')
+        command = self.launch('detached-default', detach=True)
+        self.assertEqual(command[command.index('--worker-web') + 1], 'on')
+        command = self.launch('detached-inherit', '--resume', str(earlier), detach=True)
+        self.assertEqual(command[command.index('--worker-web') + 1], 'off')
+        command = self.launch('detached-explicit', '--resume', str(earlier), '--worker-web', 'on', detach=True)
+        self.assertEqual(command[command.index('--worker-web') + 1], 'on')
+
+    def test_web_off_rejects_codex_which_can_read_the_whole_host(self):
+        for flags in (('--agent', 'codex'), ('--agent', 'claude', '--supervisor-agent', 'codex')):
+            with self.subTest(flags=flags), self.assertRaises(SystemExit), patch('sys.stderr', io.StringIO()):
+                self.launch('codex-' + flags[-1] + str(len(flags)), '--worker-web', 'off', *flags, detach=True)
 
     def test_references_are_reused_only_from_the_same_evaluator(self):
         earlier = self.tools.run_dir.parent / 'earlier'

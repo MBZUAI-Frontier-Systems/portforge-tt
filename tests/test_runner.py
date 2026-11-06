@@ -2,6 +2,7 @@
 import support  # noqa: F401  (pack and registry setup)
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import sys
 import time
@@ -76,7 +77,8 @@ class RunnerTests(unittest.TestCase):
                 runner.main(root, {'kind': 'log', 'job': 'job'})
 
     def setUp(self):
-        names = ('METAL', 'PYTHON', 'HEALTH', 'LEASES', 'MOUNTS', 'CARD_ALLOWLIST', 'WEIGHTS_BY_MODEL', 'HOST_MEMORY_LIMIT_BYTES')
+        names = ('METAL', 'PYTHON', 'HEALTH', 'LEASES', 'MOUNTS', 'CARD_ALLOWLIST', 'WEIGHTS_BY_MODEL', 'HOST_MEMORY_LIMIT_BYTES',
+                 'HIDDEN_PATHS', 'REEXPOSED_PATHS', 'AUDIT_PATTERN', 'AUDIT_ALLOWLIST')
         original = {name: getattr(runner, name) for name in names}
         self.addCleanup(lambda: [setattr(runner, name, value) for name, value in original.items()])
 
@@ -120,6 +122,184 @@ class RunnerTests(unittest.TestCase):
                                ('runtime_mounts', ['relative']), ('cards', ['not-pci'])):
                 with self.subTest(key=key), self.assertRaises(ValueError):
                     runner.configure({**config, key: value})
+
+    def hidden_config(self, root, **keys):
+        """A temporary checkout with a model tree, a test tree and a hidden-file target."""
+        metal = root / 'metal'
+        for folder in ('models/common', 'models/demos', 'tests/didt', 'tests/ttnn/unit_tests/operations/matmul'):
+            (metal / folder).mkdir(parents=True)
+        (metal / 'models/common/secret.py').write_text('secret')
+        (metal / 'models/__init__.py').write_text('')
+        (metal / 'tests/keep_file.py').write_text('kept')
+        (metal / 'tests/ttnn/unit_tests/keep.py').write_text('kept')
+        (metal / 'tests/ttnn/unit_tests/operations/matmul/test_linear.py').write_text('linear')
+        return metal, {**self.config(root), 'metal': str(metal), **keys}
+
+    @staticmethod
+    def mount_ops(args):
+        """Mount operations as tuples: ('tmpfs', dest) or (flag, source, dest)."""
+        ops, index = [], 0
+        while index < len(args):
+            if args[index] == '--tmpfs':
+                ops.append(('tmpfs', args[index + 1]))
+                index += 2
+            elif args[index] in ('--ro-bind', '--bind', '--dev-bind'):
+                ops.append((args[index], args[index + 1], args[index + 2]))
+                index += 3
+            else:
+                index += 1
+        return ops
+
+    def sandbox_ops(self, root):
+        return self.mount_ops(runner.sandbox(root, root / 'job', ['0000:02:00.0'], ['7'], 'parakeet'))
+
+    def test_default_sandbox_masks_only_generated_and_git(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metal, config = self.hidden_config(root)
+            runner.configure(config)
+            ops = self.sandbox_ops(root)
+            self.assertEqual([op[1] for op in ops if op[0] == 'tmpfs'],
+                             ['/tmp', str(metal) + '/generated', str(metal) + '/.git',
+                              '/opt/tt-metal/generated', '/opt/tt-metal/.git'])
+            self.assertFalse([op for op in ops if op[1] == '/dev/null' and op[2].startswith(str(metal))])
+
+    def test_hidden_directories_are_tmpfs_and_files_devnull_on_both_aliases(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metal, config = self.hidden_config(root, hidden_paths=['models', 'tests/didt', 'tests/keep_file.py', 'absent/path'])
+            runner.configure(config)
+            ops = self.sandbox_ops(root)
+            for alias in (str(metal), '/opt/tt-metal'):
+                self.assertIn(('tmpfs', alias + '/models'), ops)
+                self.assertIn(('tmpfs', alias + '/tests/didt'), ops)
+                self.assertIn(('--dev-bind', '/dev/null', alias + '/tests/keep_file.py'), ops)
+            self.assertFalse([op for op in ops if 'absent' in op[-1]])
+            self.assertEqual(len([op for op in ops if op == ('tmpfs', '/opt/tt-metal/models')]), 1)
+            # Masks come after the runtime mounts, so a mount inside the checkout cannot undo them.
+            last_mount = max(i for i, op in enumerate(ops) if op[-1] == '/deployment/python')
+            self.assertLess(last_mount, ops.index(('tmpfs', str(metal) + '/models')))
+
+    def test_reexposed_binds_follow_tmpfs_and_hidden_beneath_them_is_masked_last(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            hidden = ['models', 'models/common/secret.py', 'tests', 'tests/ttnn/unit_tests/operations/matmul/test_linear.py']
+            reexposed = ['models/common', 'tests/ttnn/unit_tests']
+            metal, config = self.hidden_config(root, hidden_paths=hidden, reexposed_paths=reexposed)
+            runner.configure(config)
+            ops = self.sandbox_ops(root)
+            for alias in (str(metal), '/opt/tt-metal'):
+                sequence = [op for op in ops if op[-1].startswith(alias + '/') and 'generated' not in op[-1] and '.git' not in op[-1]]
+                def at(op):
+                    self.assertEqual(sequence.count(op), 1, op)
+                    return sequence.index(op)
+                tmpfs_models, tmpfs_tests = at(('tmpfs', alias + '/models')), at(('tmpfs', alias + '/tests'))
+                bind_common = at(('--ro-bind', str(metal / 'models/common'), alias + '/models/common'))
+                bind_unit = at(('--ro-bind', str(metal / 'tests/ttnn/unit_tests'), alias + '/tests/ttnn/unit_tests'))
+                mask_secret = at(('--dev-bind', '/dev/null', alias + '/models/common/secret.py'))
+                mask_linear = at(('--dev-bind', '/dev/null', alias + '/tests/ttnn/unit_tests/operations/matmul/test_linear.py'))
+                self.assertLess(max(tmpfs_models, tmpfs_tests), min(bind_common, bind_unit))
+                self.assertLess(max(bind_common, bind_unit), min(mask_secret, mask_linear))
+
+    def test_reexposed_path_missing_from_checkout_is_skipped(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metal, config = self.hidden_config(root, hidden_paths=['models'], reexposed_paths=['models/absent'])
+            runner.configure(config)
+            ops = self.sandbox_ops(root)
+            self.assertFalse([op for op in ops if 'absent' in op[-1]])
+            self.assertIn(('tmpfs', str(metal) + '/models'), ops)
+
+    def test_hiding_configuration_rejects_unsafe_or_unanchored_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _, base = self.hidden_config(root)
+            runner.configure({**base, 'hidden_paths': ['tests', 'tests/ttnn/unit_tests/keep.py'],
+                              'reexposed_paths': ['tests/ttnn/unit_tests']})
+            invalid = [{'hidden_paths': '/abs'}, {'hidden_paths': None}, {'hidden_paths': ['/abs']},
+                       {'hidden_paths': ['models/../x']}, {'hidden_paths': ['./models']},
+                       {'hidden_paths': ['models/']}, {'hidden_paths': ['']}, {'hidden_paths': ['models\nx']},
+                       {'hidden_paths': [3]}, {'hidden_paths': ['models'], 'reexposed_paths': ['tests/keep_file.py']},
+                       {'hidden_paths': ['models'], 'reexposed_paths': ['models']},
+                       {'hidden_paths': ['models'], 'reexposed_paths': ['/models/common']},
+                       {'hidden_paths': ['models'], 'audit_pattern': 'a\nb'}, {'hidden_paths': ['models'], 'audit_pattern': 5},
+                       {'audit_allowlist': 'x'}, {'audit_allowlist': ['../x']}]
+            for overrides in invalid:
+                with self.subTest(overrides=overrides), self.assertRaises(ValueError):
+                    runner.configure({**base, **overrides})
+
+    def preflight(self, root, config, job, output, returncode=0):
+        """One preflight through runner.main with execute stubbed; returns (result, (args, total), mark mock)."""
+        (root / 'harness').mkdir(exist_ok=True)
+        (root / 'harness/runtime.json').write_text(json.dumps(config))
+        captured = []
+        def execute(args, job_dir, total, monitor, stage='smoke'):
+            captured.append((args, total))
+            (job_dir / 'stdout.log').write_text(output)
+            (job_dir / 'stderr.log').write_text('')
+            return {'returncode': returncode, 'timeout': False}
+        with patch.object(runner, 'cards', return_value={'0000:02:00.0': '7'}), \
+             patch.object(runner, 'health', return_value={'state': 'healthy'}), \
+             patch.object(runner, 'mark') as mark, patch.object(runner, 'execute', side_effect=execute):
+            result = runner.main(root, {'kind': 'preflight', 'pci': '0000:02:00.0', 'job': job, 'model': 'parakeet'})
+        return result, captured[-1], mark
+
+    def test_preflight_probe_is_unchanged_by_default_and_audited_when_configured(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _, plain = self.hidden_config(root)
+            _, (args, total), _ = self.preflight(root, plain, 'plain', 'ISOLATION_DEVICE_OK\n')
+            self.assertEqual((total, args[2]), (302, '300'))
+            self.assertFalse([a for a in args if 'AUDIT' in a or 'decorators' in a])
+            audited = {**plain, 'hidden_paths': ['models'], 'audit_pattern': 'resnet',
+                       'audit_allowlist': ['models/common/secret.py']}
+            _, (args, total), _ = self.preflight(root, audited, 'audited', 'ISOLATION_DEVICE_OK\nAUDIT_OK 1\n')
+            self.assertEqual((total, args[2]), (482, '480'))
+            code = args[args.index('-c') + 1]
+            self.assertLess(code.index('import ttnn.decorators'), code.index('open_device'))
+            self.assertIn('AUDIT_LEAK', code)
+            compile(code, '<preflight>', 'exec')  # the combined probe + audit must at least parse
+            self.assertEqual(args[-3:], ['resnet', json.dumps(['models/common/secret.py']), '/opt/tt-metal'])
+
+    def test_audit_leak_fails_preflight_as_audit_leak_and_quarantines_card(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _, config = self.hidden_config(root, hidden_paths=['models'], audit_pattern='resnet')
+            result, _, mark = self.preflight(root, config, 'audited', 'AUDIT_LEAK docs/leak.md\nAUDIT_FAILED 1 unlisted hits\n', 1)
+            self.assertEqual((result['failure'], result['returncode']), ('audit_leak', 1))
+            mark.assert_called_once_with('0000:02:00.0', 'quarantined', 'audited')
+            # A firmware path inside an AUDIT_ERROR line matches failure_kind's firmware heuristic; the audit still owns it.
+            result, _, mark = self.preflight(root, config, 'audited-firmware', 'AUDIT_ERROR grep exited 2 grep: '
+                                             '/opt/tt-metal/tt_metal/hw/firmware/x.cc: Permission denied\n', 2)
+            self.assertEqual(result['failure'], 'audit_leak')
+            mark.assert_called_once_with('0000:02:00.0', 'quarantined', 'audited-firmware')
+
+    def test_audit_script_flags_unlisted_hits_and_ignores_excluded_directories(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            files = {'docs/leak.md': 'ResNet50 notes', 'docs/allowed.md': 'resnet bring-up',
+                     'ttnn/plain.py': 'nothing here', 'build_Release/out.txt': 'resnet',
+                     'pkg/build/out.txt': 'resnet', 'third_party/x.txt': 'resnet', 'pkg/_deps/y.txt': 'resnet',
+                     'python_env/lib/torchvision/resnet.py': 'resnet'}
+            for name, text in files.items():
+                (root / name).parent.mkdir(parents=True, exist_ok=True)
+                (root / name).write_text(text)
+            (root / 'binary.dat').write_bytes(b'\x00resnet')
+            (root / '.git').write_text('gitdir: /elsewhere/worktrees/x\nresnet pointer\n')
+            def audit(pattern, allowlist):
+                return subprocess.run([sys.executable, '-c', runner.AUDIT_SCRIPT, pattern, json.dumps(allowlist), str(root)],
+                                      capture_output=True, text=True)
+            leak = audit('resnet', ['docs/allowed.md'])
+            self.assertEqual(leak.returncode, 1, leak.stderr)
+            self.assertIn('AUDIT_LEAK docs/leak.md', leak.stdout)
+            self.assertIn('AUDIT_FAILED 1', leak.stdout)
+            self.assertNotIn('build', leak.stdout + leak.stderr)
+            clean = audit('resnet', ['docs/allowed.md', 'docs/leak.md'])
+            self.assertEqual(clean.returncode, 0, clean.stderr)
+            self.assertEqual(clean.stdout.split(), ['AUDIT_OK', '2'])
+            broken = audit('(', [])
+            self.assertEqual(broken.returncode, 2)
+            self.assertIn('AUDIT_ERROR', broken.stdout)
 
     def test_sysfs_discovery_and_optional_pci_allowlist(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -1,0 +1,76 @@
+{
+ "schema_version": 1,
+ "verified_date": "2026-11-05",
+ "verification": [
+  "model.safetensors SHA-256 and byte size: Hugging Face LFS metadata (api/models/timm/resnet50.tv_in1k/revision/<revision>?blobs=true) at the pinned revision.",
+  "config.json SHA-256 and byte size: computed from the raw bytes served at the pinned revision (resolve URL).",
+  "scope: checkpoint identity and pinned config only; the FP32 oracle and TT accuracy are measured by evaluate.py.",
+  "tensor layout: the safetensors header (320 tensors, incl. 53 num_batches_tracked) matches torchvision resnet50 state_dict names."
+ ],
+ "models": {
+  "resnet50": {
+   "repo_id": "timm/resnet50.tv_in1k",
+   "revision": "78f3ecfdb38e06d9b8397f662e7ab8fee96026fa",
+   "license": "bsd-3-clause",
+   "checkpoint_format": "safetensors",
+   "weight_files": [
+    "model.safetensors"
+   ],
+   "weight_index": null,
+   "files": {
+    "config.json": {
+     "sha256": "7fe8a420770b9d03717e5c2e61ffcb3cc8666bd923ea8de03700df60761e1ea8",
+     "bytes": 646
+    },
+    "model.safetensors": {
+     "sha256": "5d061a3c593d795bfe682d9b152bafbcf550579873492def3515b46db1189888",
+     "bytes": 102469840
+    }
+   },
+   "architecture": {
+    "architecture": "resnet50",
+    "num_classes": 1000,
+    "num_features": 2048,
+    "pretrained_cfg": {
+     "tag": "tv_in1k",
+     "custom_load": false,
+     "input_size": [
+      3,
+      224,
+      224
+     ],
+     "fixed_input_size": false,
+     "interpolation": "bilinear",
+     "crop_pct": 0.875,
+     "crop_mode": "center",
+     "mean": [
+      0.485,
+      0.456,
+      0.406
+     ],
+     "std": [
+      0.229,
+      0.224,
+      0.225
+     ],
+     "num_classes": 1000,
+     "pool_size": [
+      7,
+      7
+     ],
+     "first_conv": "conv1",
+     "classifier": "fc",
+     "license": "bsd-3-clause",
+     "origin_url": "https://github.com/pytorch/vision"
+    }
+   },
+   "source_urls": [
+    "https://huggingface.co/timm/resnet50.tv_in1k",
+    "https://huggingface.co/api/models/timm/resnet50.tv_in1k/revision/78f3ecfdb38e06d9b8397f662e7ab8fee96026fa?blobs=true",
+    "https://huggingface.co/timm/resnet50.tv_in1k/resolve/78f3ecfdb38e06d9b8397f662e7ab8fee96026fa/config.json",
+    "https://arxiv.org/abs/1512.03385",
+    "https://github.com/pytorch/vision/blob/main/torchvision/models/resnet.py"
+   ]
+  }
+ }
+}

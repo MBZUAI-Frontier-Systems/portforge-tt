@@ -488,7 +488,7 @@ def verdict_latency(checks, cases=()):
     """
     import statistics
     throughput_only = {case["name"] for case in cases
-                       if type(case.get("batch")) is int and case["batch"] > LATENCY_MAX_BATCH}
+                       if (type(case.get("batch")) is int and case["batch"] > LATENCY_MAX_BATCH) or case.get("stream")}
     p50, p99, first = [], [], []
     for check in checks:
         samples = check.get("seconds")
@@ -510,15 +510,19 @@ def verdict_latency(checks, cases=()):
 
 
 def scaling_curve(checks, cases):
-    """Throughput per batch size from the perf stage's batch-sweep cases (case["batch"] rows)."""
-    batches = {case["name"]: case["batch"] for case in cases if type(case.get("batch")) is int}
+    """Throughput per batch size from the perf stage's batch-sweep cases (case["batch"] rows).
+
+    A case with "stream": n times n back-to-back batches of case["batch"] rows in one call
+    (the backend may overlap transfers and compute), so its items are batch * n."""
+    sizes = {case["name"]: (case["batch"], case.get("stream", 1)) for case in cases if type(case.get("batch")) is int}
     curve = []
     for check in checks:
-        batch = batches.get(check.get("name"))
+        batch, stream = sizes.get(check.get("name"), (None, 1))
         if batch and check.get("p50_seconds"):
-            curve.append(dict(case=check["name"], batch=batch, items=batch, p50_seconds=check["p50_seconds"],
-                              p99_seconds=check.get("p99_seconds"), items_per_second=batch / check["p50_seconds"]))
-    return sorted(curve, key=lambda row: row["batch"])
+            row = dict(case=check["name"], batch=batch, items=batch * stream, p50_seconds=check["p50_seconds"],
+                       p99_seconds=check.get("p99_seconds"), items_per_second=batch * stream / check["p50_seconds"])
+            curve.append(dict(row, stream=stream) if stream != 1 else row)
+    return sorted(curve, key=lambda row: (row["batch"], row.get("stream", 1)))
 
 
 def validate_input_preservation(expected, observed):

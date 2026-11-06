@@ -11,14 +11,20 @@ port_json="${1:?usage: setup_reference.sh <port.json> [reference_root]}"
 reference_root="${2:-$HOME/portforge}"
 torch_index="${TORCH_INDEX:-https://download.pytorch.org/whl/cu126}"  # use .../whl/cpu on CPU-only hosts
 mkdir -p "$reference_root"
-python3 -m venv "$reference_root/.venv"
+# An existing venv is kept (hosts without ensurepip bootstrap one with --without-pip first).
+[ -x "$reference_root/.venv/bin/python" ] || python3 -m venv "$reference_root/.venv"
 reference_python="$reference_root/.venv/bin/python"
 "$reference_python" -m pip install --only-binary=:all: --index-url https://pypi.org/simple pip==26.2.1 setuptools==84.0.0
-"$reference_python" -m pip install --index-url "$torch_index" torch==2.14.0 --report "$reference_root/torch-install.json"
+# torchvision/torchaudio come from the torch index: PyPI wheels target another CUDA build of torch.
+torch_packages=(torch==2.14.0)
 packages=()
 while IFS= read -r package; do
-  [ -n "$package" ] && packages+=("$package")
+  case "$package" in
+    torchvision*|torchaudio*) torch_packages+=("$package") ;;
+    ?*) packages+=("$package") ;;
+  esac
 done < <("$reference_python" -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1])).get("reference", {}).get("packages", [])))' "$port_json")
+"$reference_python" -m pip install --index-url "$torch_index" "${torch_packages[@]}" --report "$reference_root/torch-install.json"
 if [ "${#packages[@]}" -gt 0 ]; then
   "$reference_python" -m pip install --index-url https://pypi.org/simple "${packages[@]}" --report "$reference_root/reference-install.json"
 fi

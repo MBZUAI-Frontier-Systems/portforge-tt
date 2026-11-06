@@ -112,6 +112,11 @@ keys, and which cards the campaign may lease.
   List the cards with `ls /sys/class/tenstorrent` or `tt-smi`.
 - Reference host: copy `port.json` and run `bash setup_reference.sh port.json`.
 - Fill a copy of `cluster.yaml`; keep it out of version control.
+- Other ports of this model in the TT-Metal checkout must not reach the agents when the campaign
+  tests porting without them: list them in `porting.tt.hidden_paths` (re-expose shared utilities
+  with `reexposed_paths`) and set `audit_pattern` so the preflight fails if the model's name appears
+  elsewhere (`audit_allowlist` names benign hits). The audit needs GNU or BSD grep. Add
+  `--worker-web off` to the launch so the worker cannot fetch them either (claude or opencode agents).
 - Reference smoke on the reference host, once, before any campaign:
   `PORTFORGE_REFERENCE_EXECUTION=direct python evaluate.py reference --stage smoke --corpus corpus.json --out /tmp/ref-smoke`
   (with `evaluate.py`, `portforge_eval.py`, `portforge_models.py` and `models.json` copied beside it).
@@ -124,6 +129,7 @@ whether to watch the run together.
 ```sh
 portforge --port ports/<name> --cluster my-cluster.yaml --hours 6 --detach
 # optional: --optimize throughput --constraint "p99_latency<=1.2*baseline" --scenario offline --beam 4
+#           --worker-web off   (no WebFetch/WebSearch for the worker; the supervisor never has them)
 ```
 
 While it runs, read `runs/<run>/status.json`, the turn files and
