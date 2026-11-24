@@ -169,7 +169,7 @@ def resume_workspace(workspace, previous_run, model, backends, note=''):
 
 def start(port, cluster=None, *, hours=6, detach=True, corpus=None, model=None, run_dir=None,
           agent='opencode', agent_model=None, supervisor_agent=None, supervisor_model=None,
-          optimize=None, constraint=(), scenario=None, beam=None,
+          optimize=None, constraint=(), scenario=None, beam=None, no_web=False,
           resume=None, resume_note='', seed_run=None, seed_job=None, reference_run=None):
     """Launch a campaign for the pack at ``port``; raises ValueError on a bad selection.
 
@@ -179,7 +179,7 @@ def start(port, cluster=None, *, hours=6, detach=True, corpus=None, model=None, 
     model: registry key to port (default: the pack's key). run_dir: default ./runs/<UTC time>.
     agent / supervisor_agent: opencode, claude or codex, with optional model overrides.
     optimize / constraint / scenario: objective after the gates (see objective.py; default Pareto).
-    beam: parallel search width (default: TT cards in the cluster).
+    beam: parallel search width (default: TT cards in the cluster). no_web: the worker gets no web tools.
     resume / resume_note: continue an earlier run. seed_run / seed_job: start from an earlier fresh
     run's workspace (or one of its passing bringup snapshots). reference_run: reuse its FP32 references.
     """
@@ -232,6 +232,8 @@ def start(port, cluster=None, *, hours=6, detach=True, corpus=None, model=None, 
                 command += [flag, str(value)]
         for value in constraint:
             command += ['--constraint', value]
+        if no_web:
+            command += ['--no-web']
         command += ['--agent', agents['worker']['backend'], '--agent-model', agents['worker']['model'],
                     '--supervisor-agent', agents['supervisor']['backend'],
                     '--supervisor-model', agents['supervisor']['model']]
@@ -284,7 +286,7 @@ def start(port, cluster=None, *, hours=6, detach=True, corpus=None, model=None, 
                 'agent_backends': {role: agents[role]['backend'] for role in agents},
                 'agent_models': {role: agents[role]['model'] for role in agents},
                 'operator_note': resume_note.strip(),
-                'optimization': optimization, 'beam': beam,
+                'optimization': optimization, 'beam': beam, 'worker_web': not no_web,
                 'reference_run': str(reference_run.resolve()) if reference_run else None, **provenance}
     write_json(run / 'manifest.json', manifest)
     command = [sys.executable, str(run / 'harness/controller.py'), '--controller', '--run-dir', str(run),

@@ -625,6 +625,13 @@ def run_candidate(args, pack):
       probe_case(...)      same signature; one untimed call on numerical cases (e.g. a decoder's
                            encoder states and logits), synchronised and checked the same way
       case_inputs(inputs, case, spec) -> dict    default: case_arrays(inputs, case)
+      prepare_case(backend, case, inputs, spec, config) -> inputs
+                           untimed, before the timed calls: e.g. upload the case's inputs to the
+                           device so forward_case times only the kernels (kernel-benchmark packs)
+      collect_case(backend, case, outputs, spec, config) -> {name: array}
+                           untimed, after each call's synchronisation: e.g. read device outputs back
+      TT_COMPUTE_OPS       ttnn entry points counted as TT compute (default TT_COMPUTE_OPS); an empty
+                           tuple skips the "missing TT compute" check (the pack guards host compute)
     """
     pack = as_pack(pack)
     import importlib
@@ -647,7 +654,8 @@ def run_candidate(args, pack):
     import ttnn
     require_tt_precision(args.precision, ttnn, pack.PRECISIONS)
     calls = [0]
-    for name in TT_COMPUTE_OPS:
+    compute_ops = getattr(pack, "TT_COMPUTE_OPS", TT_COMPUTE_OPS)
+    for name in compute_ops:
         original = getattr(ttnn, name, None)
         if original:
             def counted(*a, _op=original, **kw):
@@ -660,6 +668,7 @@ def run_candidate(args, pack):
     inputs = np.load(public / "inputs.npz", allow_pickle=False)
     select = getattr(pack, "case_inputs", None) or (lambda inputs, case, spec: case_arrays(inputs, case))
     probe = getattr(pack, "probe_case", None)
+    prepare, collect = getattr(pack, "prepare_case", None), getattr(pack, "collect_case", None)
     arrays, measured = {}, dict(cases=[], device_options=options, **identity, suite_sha256=suite_hash(spec),
                                 timing_protocol=pack.TIMING_PROTOCOL, verified_weight_files=verified)
 
@@ -673,6 +682,8 @@ def run_candidate(args, pack):
         start = time.perf_counter()
         ttnn.synchronize_device(device)
         elapsed += time.perf_counter() - start
+        if collect:
+            outputs = collect(backend, case, outputs, spec, config)
         validate_input_preservation({key: given[key] for key in supplied if key in given}, supplied)
         return {key: np.asarray(value) for key, value in outputs.items()}, elapsed
 
@@ -696,6 +707,8 @@ def run_candidate(args, pack):
             name = case["name"]
             progress.mark("case_begin", name)
             given = select(inputs, case, spec)
+            if prepare:
+                given = prepare(backend, case, given, spec, config)
             if probe and case["numerical"]:
                 progress.mark("probe", name)
                 outputs, _ = call(probe, backend, case, given)
@@ -711,7 +724,7 @@ def run_candidate(args, pack):
                 progress.mark("forward", name, repeat)
                 before = calls[0]
                 outputs, elapsed = call(pack.forward_case, backend, case, given)
-                if calls[0] == before:
+                if compute_ops and calls[0] == before:
                     raise ValueError("missing TT compute")
                 if first is None:
                     first, cold = {key: value.copy() for key, value in outputs.items()}, elapsed

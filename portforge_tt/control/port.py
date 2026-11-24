@@ -114,6 +114,8 @@ def freeze(port, harness):
     for name in PACK_FILES + OPTIONAL_DOCS:
         if (port["dir"] / name).is_file():
             shutil.copyfile(port["dir"] / name, harness / name)
+    if (port["dir"] / "prompts").is_dir():  # optional worker.md / supervisor.md replacing the shared ones
+        shutil.copytree(port["dir"] / "prompts", harness / "pack_prompts")
 
 
 # The selected pack. A frozen run harness carries its pack (port.json beside this file), so the
@@ -206,7 +208,7 @@ def agent_environment(manifest):
     """Role backend/model selection recorded in the manifest (opencode for older runs)."""
     backends = manifest.get('agent_backends', {})
     models = manifest.get('agent_models', {})
-    environment = {}
+    environment = {'PORTFORGE_WORKER_WEB': '0'} if manifest.get('worker_web') is False else {}
     for role in ('worker', 'supervisor'):
         environment['PORTFORGE_' + role.upper() + '_BACKEND'] = backends.get(role, 'opencode')
         if models.get(role):

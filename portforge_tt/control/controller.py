@@ -511,6 +511,7 @@ def main(argv=None):
                         help='Repeatable, e.g. "p99_latency<=1.1*baseline" or "dram_bytes<=4e9"')
     parser.add_argument('--scenario', choices=tuple(objective.SCENARIOS), help='Deployment scenario to report')
     parser.add_argument('--beam', type=int, help='Parallel search width (default: TT cards in the cluster)')
+    parser.add_argument('--no-web', action='store_true', help='No web search or fetch for the worker')
     args = parser.parse_args(argv)
     if args.controller:
         return loop(args)

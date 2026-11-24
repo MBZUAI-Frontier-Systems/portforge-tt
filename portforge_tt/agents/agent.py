@@ -51,8 +51,10 @@ PROMPTS = Path(__file__).resolve().parents[1] / "prompts"
 
 
 def read_prompt(name, port=None):
-    """Load prompts/<name>.md without its maintainer comment, filling pack placeholders."""
-    text = (PROMPTS / (name + ".md")).read_text()
+    """Load prompts/<name>.md without its maintainer comment, filling pack placeholders.
+    A pack may replace a role's instructions with its own prompts/<name>.md (frozen as pack_prompts/)."""
+    override = Path(port["dir"]) / "pack_prompts" / (name + ".md") if port is not None else None
+    text = (override if override is not None and override.is_file() else PROMPTS / (name + ".md")).read_text()
     if text.startswith("<!--"):
         text = text.split("-->", 1)[1]
     for field in ("title", "repo_id", "key"):
@@ -335,7 +337,7 @@ def worker_node(workspace, run_dir, tools, turn, prompt):
     instructions = read_prompt("worker", campaign_port(run_dir)) + "\n\n"
     return save(run_dir, "worker", turn,
                 query(workspace, run_dir, "worker", turn, instructions + prompt + WORKER_HANDOFF,
-                      tools, True, WORKER_TIMEOUT_SECONDS))
+                      tools, os.environ.get("PORTFORGE_WORKER_WEB", "1") == "1", WORKER_TIMEOUT_SECONDS))
 
 
 @job(resources={"agent_creds": 1})
